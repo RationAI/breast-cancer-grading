@@ -39,7 +39,8 @@ extend-ignore = [
     "F722", # jaxtyping
     "N801", # class name lowercase
     "N806", # variable with CAPITALIZED name
-    "B020" # local variable shadowing built-in
+    "B020", # local variable shadowing built-in
+    "BLE001" # broad catches are deliberate in the network/QC preprocessing loops
 ]
 
 [lint.flake8-tidy-imports]

@@ -8,8 +8,8 @@ import pandas as pd
 from omegaconf import DictConfig
 from rationai.client import AsyncClient
 from rationai.mlkit import autolog, with_cli_args
-from rationai.provenance import log_provenance
 from rationai.mlkit.lightning.loggers import MLFlowLogger
+from rationai.provenance import log_provenance
 from tqdm import tqdm
 
 
@@ -81,7 +81,9 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             local_dir=str(tmp_dir_masks), artifact_path="epithelium_masks"
         )
 
-    log_provenance(logger=logger, config=config)  # links this run to user, git, image, inputs
+    log_provenance(
+        logger=logger, config=config
+    )  # links this run to user, git, image, inputs
 
 
 if __name__ == "__main__":

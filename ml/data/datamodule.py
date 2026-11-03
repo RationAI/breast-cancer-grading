@@ -16,7 +16,6 @@ from collections.abc import Sequence
 
 import lightning.pytorch as pl
 import numpy as np
-import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
@@ -101,7 +100,7 @@ class DataModule(pl.LightningDataModule):
         if self.class_balanced:
             grades: np.ndarray = self._datasets["train"].grades  # type: ignore[attr-defined]
             counts = np.bincount(grades)
-            weights = torch.from_numpy(1.0 / counts[grades]).double()
+            weights = (1.0 / counts[grades]).tolist()
             sampler = WeightedRandomSampler(weights, num_samples=len(grades))
             return self._dataloader("train", shuffle=False, sampler=sampler)
         return self._dataloader("train", shuffle=True)

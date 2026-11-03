@@ -17,6 +17,7 @@ from torch.utils.data import Dataset
 
 from ml.typing import MILSample, SlideMetadata
 
+
 SLIDE_COLUMN = "slide_id"
 GRADE_COLUMN = "grade"
 SPLIT_COLUMN = "split"

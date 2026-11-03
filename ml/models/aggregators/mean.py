@@ -6,7 +6,7 @@ from ml.models.aggregators.base import Aggregator
 from ml.typing import Bag
 
 
-class MeanAggregator(Aggregator):
+class MeanAggregator(Aggregator[Bag]):
     """Averages the tile features of a slide — the parameter-free MIL baseline."""
 
     def __init__(self, feature_dim: int) -> None:

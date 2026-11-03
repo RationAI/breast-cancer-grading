@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+
 SEED = 42
 EMBEDDING_DIM = 128
 OUTPUT_DIR = Path("data/demo")

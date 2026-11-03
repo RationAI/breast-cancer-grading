@@ -11,8 +11,8 @@ from openslide import OpenSlide
 from rationai.masks import slide_resolution, tissue_mask, write_big_tiff
 from rationai.masks.processing import process_items
 from rationai.mlkit import autolog, with_cli_args
-from rationai.provenance import log_provenance
 from rationai.mlkit.lightning.loggers import MLFlowLogger
+from rationai.provenance import log_provenance
 
 
 @ray.remote(memory=3 * 1024**3)
@@ -53,7 +53,9 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             local_dir=output_dir, artifact_path=config.mlflow_artifact_path
         )
 
-    log_provenance(logger=logger, config=config)  # links this run to user, git, image, inputs
+    log_provenance(
+        logger=logger, config=config
+    )  # links this run to user, git, image, inputs
 
 
 if __name__ == "__main__":

@@ -9,15 +9,14 @@ from abc import ABC, abstractmethod
 
 from torch import Tensor, nn
 
-from ml.typing import Bag
 
+class Aggregator[InputT](nn.Module, ABC):
+    """Reduces one slide's tiles to a single slide vector.
 
-class Aggregator(nn.Module, ABC):
-    """Reduces one slide's tiles ``(N, D)`` to a single slide vector.
-
-    Implementations return the pooled vector and, optionally, per-tile weights
-    (``None`` for parameter-free poolings such as mean/max), surfaced for
-    interpretability (tile-level attention heatmaps).
+    Generic over its input type: flat aggregators specialise as
+    ``Aggregator[Bag]`` (a tile tensor ``(N, D)``). Implementations return the
+    pooled vector and, optionally, per-tile weights (``None`` for parameter-free
+    poolings such as mean/max), surfaced for interpretability (heatmaps).
     """
 
     @property
@@ -26,7 +25,7 @@ class Aggregator(nn.Module, ABC):
         """Dimensionality of the aggregated slide vector."""
 
     @abstractmethod
-    def forward(self, bag: Bag) -> tuple[Tensor, Tensor | None]:
+    def forward(self, bag: InputT) -> tuple[Tensor, Tensor | None]:
         """Aggregate one slide's tiles.
 
         Args:

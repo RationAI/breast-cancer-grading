@@ -11,7 +11,7 @@ from ml.models.aggregators.base import Aggregator
 from ml.typing import Bag
 
 
-class AttentionMIL(Aggregator):
+class AttentionMIL(Aggregator[Bag]):
     """Gated-attention pooling over a bag of tile features.
 
     Learns a scalar attention weight per tile via the gated mechanism

@@ -13,8 +13,7 @@ defaults:
       - multiclass_auroc
       - multiclass_f1
       - quadratic_kappa
-      - confusion_matrix
-  - /trainer: default
+  - /trainer: demo
   - /data: demo
   - _self_
 

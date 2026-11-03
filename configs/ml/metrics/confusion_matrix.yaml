@@ -1,5 +1,0 @@
-# @package ml.metrics
-confusion_matrix:
-  _target_: torchmetrics.ConfusionMatrix
-  task: multiclass
-  num_classes: ${num_classes}

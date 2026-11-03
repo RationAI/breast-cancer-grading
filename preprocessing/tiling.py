@@ -270,7 +270,9 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
 
     ray.shutdown()
 
-    log_provenance(logger=logger, config=config)  # links this run to user, git, image, inputs
+    log_provenance(
+        logger=logger, config=config
+    )  # links this run to user, git, image, inputs
 
 
 if __name__ == "__main__":

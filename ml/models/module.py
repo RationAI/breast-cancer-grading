@@ -72,6 +72,12 @@ class GradingModule(pl.LightningModule):
         self.valid_metrics = base.clone(prefix="valid/")
         self.test_metrics = base.clone(prefix="test/")
 
+        # The confusion matrix is not scalar-loggable, so it lives outside the
+        # collections: per-class recalls are logged, the full matrix printed.
+        self.confusion = torchmetrics.ConfusionMatrix(
+            task="multiclass", num_classes=head.out_dim
+        )
+
     def forward(self, bag: Bag) -> tuple[Tensor, Tensor | None]:
         """Run one slide through encoder -> aggregator -> head.
 
@@ -121,7 +127,25 @@ class GradingModule(pl.LightningModule):
 
         metrics.update(torch.softmax(y_pred, dim=-1), y)
         self.log_dict(metrics, on_step=False, on_epoch=True)
+        if stage != "train":
+            self.confusion.update(torch.softmax(y_pred, dim=-1), y)
         return loss
+
+    def _log_confusion(self, stage: str) -> None:
+        """Log per-class recalls and print the confusion matrix for this epoch."""
+        cm = self.confusion.compute()
+        recalls = cm.diagonal() / cm.sum(dim=1).clamp_min(1)
+        for i, recall in enumerate(recalls):
+            self.log(f"{stage}/recall_class_{i}", recall)
+        if stage == "test":
+            print(f"\n{stage} confusion matrix (rows = true class 0..3):\n{cm}")
+        self.confusion.reset()
+
+    def on_validation_epoch_end(self) -> None:
+        self._log_confusion("valid")
+
+    def on_test_epoch_end(self) -> None:
+        self._log_confusion("test")
 
     def training_step(self, batch: list[MILSample], batch_idx: int) -> Tensor:
         return self._step(batch, "train", self.train_metrics)

@@ -8,8 +8,8 @@ import pandas as pd
 from aiohttp import ClientSession, ClientTimeout
 from omegaconf import DictConfig
 from rationai.mlkit import autolog, with_cli_args
-from rationai.provenance import log_provenance
 from rationai.mlkit.lightning.loggers import MLFlowLogger
+from rationai.provenance import log_provenance
 
 
 async def put_request(
@@ -206,7 +206,9 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             )
         )
 
-    log_provenance(logger=logger, config=config)  # links this run to user, git, image, inputs
+    log_provenance(
+        logger=logger, config=config
+    )  # links this run to user, git, image, inputs
 
 
 if __name__ == "__main__":
