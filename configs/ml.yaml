@@ -1,0 +1,23 @@
+defaults:
+  - base
+  - _self_
+
+seed: ${random_seed:}
+
+mode: fit  # fit | validate | test | predict
+checkpoint: null  # path to a .ckpt to resume (fit) or load weights (validate/test/predict)
+
+# After a `fit` run, evaluate the best checkpoint on the test split so models are
+# directly comparable on held-out data right after training. Ignored unless mode=fit.
+test_after_fit: true
+
+# Task shape — 4-class Nottingham grading: 0 = no tumour epithelium (negative
+# slide), 1 = G1 (well differentiated), 2 = G2 (moderately), 3 = G3 (poorly).
+num_classes: 4
+feature_dim: ???  # tile-feature width = encoder.out_dim; set per experiment
+
+# Provenance — paste the values the registration printed (see README,
+# "Provenance"). Left null, training runs unverified (best effort).
+dataset:
+  run_id: null       # register_dataset's printed run_id — training verifies the disk against it
+  split_uris: null   # e.g. {train: 'mlflow-artifacts:/<exp_id>/<run_id>/artifacts/train.csv', test: '...'}

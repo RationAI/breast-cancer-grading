@@ -1,0 +1,6 @@
+# @package _global_
+
+mpp: 0.24  # level 0 of bc20-24 MOU slides (Virchow2 expects 224 px @ 0.5 mpp-equivalent)
+tile_extent: 224
+stride: 112
+data_name: mou_224

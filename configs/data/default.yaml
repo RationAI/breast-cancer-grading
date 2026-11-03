@@ -1,0 +1,12 @@
+# @package _global_
+# Preprocessing data card: which slides to tile and where the masks live.
+# The data mapping CSV must have columns: path (WSI path without suffix),
+# grade, case — see README, "Labels".
+dataset:
+  name: bc20-24
+  paths:
+    qc_masks: ${project_path}/qc_masks
+    data_mapping: ???  # e.g. ${project_path}/data_mapping.csv
+  mlflow_uris:
+    tissue_masks: null       # tissue-masks run artifact URI
+    epithelium_masks: null   # epithelium-masks run artifact URI (optional)

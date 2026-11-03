@@ -1,0 +1,5 @@
+# @package _global_
+
+dataset:
+  name: mou_224  # the tiling run's data_name
+  path: ???      # slides/tiles dataset URI printed by the tiling run

@@ -1,0 +1,6 @@
+# @package ml.metrics
+kappa:
+  _target_: torchmetrics.CohenKappa
+  task: multiclass
+  num_classes: ${num_classes}
+  weights: quadratic

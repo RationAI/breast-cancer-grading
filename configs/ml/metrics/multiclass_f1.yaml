@@ -1,0 +1,5 @@
+# @package ml.metrics
+f1:
+  _target_: torchmetrics.classification.MulticlassF1Score
+  num_classes: ${num_classes}
+  average: macro

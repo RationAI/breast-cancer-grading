@@ -1,0 +1,10 @@
+defaults:
+  - hydra: default
+  - logger: mlflow
+  - _self_
+
+data_path: /mnt/data/MOU/breast/grading  # TODO: raw bc20-24 WSI data root
+project_path: /mnt/projects/brc-grading   # TODO: project folder (cohort CSV, labels, outputs)
+
+metadata:
+  experiment_name: BRC Grading

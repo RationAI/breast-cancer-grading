@@ -1,0 +1,5 @@
+# out_dim = num_classes: one logit per Nottingham grade.
+_target_: ml.models.heads.LinearHead
+in_dim: ${feature_dim}
+out_dim: ${num_classes}
+dropout: 0.5

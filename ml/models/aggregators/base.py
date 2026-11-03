@@ -1,0 +1,42 @@
+"""Aggregator abstract base class.
+
+An aggregator reduces one slide's tiles to a single slide-level vector
+``(D',)``. This is the multiple-instance-learning (MIL) pooling step; swapping the
+aggregator (mean, gated attention, ...) is the primary experimental axis.
+"""
+
+from abc import ABC, abstractmethod
+
+from torch import Tensor, nn
+
+from ml.typing import Bag
+
+
+class Aggregator(nn.Module, ABC):
+    """Reduces one slide's tiles ``(N, D)`` to a single slide vector.
+
+    Implementations return the pooled vector and, optionally, per-tile weights
+    (``None`` for parameter-free poolings such as mean/max), surfaced for
+    interpretability (tile-level attention heatmaps).
+    """
+
+    @property
+    @abstractmethod
+    def out_dim(self) -> int:
+        """Dimensionality of the aggregated slide vector."""
+
+    @abstractmethod
+    def forward(self, bag: Bag) -> tuple[Tensor, Tensor | None]:
+        """Aggregate one slide's tiles.
+
+        Args:
+            bag: A flat per-tile feature tensor ``(N, D)``.
+
+        Returns:
+            A tuple ``(pooled, attention)`` where ``pooled`` has shape
+            ``(out_dim,)`` and ``attention`` has shape ``(N,)`` or is ``None``
+            if the aggregator assigns no weights.
+        """
+
+
+__all__ = ["Aggregator"]

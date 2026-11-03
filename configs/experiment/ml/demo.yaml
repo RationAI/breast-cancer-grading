@@ -1,0 +1,38 @@
+# @package _global_
+# End-to-end pipeline check on synthetic embeddings (CPU, no cluster needed).
+defaults:
+  - /ml: module
+  - /ml/encoder@ml.encoder: identity
+  - /ml/aggregator@ml.aggregator: attention
+  - /ml/head@ml.head: linear
+  - /ml/loss@ml.loss: cross_entropy
+  - /ml/optimizer@ml.optimizer: adam
+  - /ml/lr_scheduler@ml.lr_scheduler: reduce_lr_on_plateau
+  - /ml/metrics:
+      - multiclass_accuracy
+      - multiclass_auroc
+      - multiclass_f1
+      - quadratic_kappa
+      - confusion_matrix
+  - /trainer: default
+  - /data: demo
+  - _self_
+
+feature_dim: 128  # demo embedding size (Virchow2 is 2560)
+
+metadata:
+  run_name: Demo — attention MIL on synthetic embeddings
+  description: |
+    Synthetic 4-class (N/G1/G2/G3) embedding bags verifying the grading
+    pipeline end to end on CPU.
+  hyperparameters:
+    encoder: ${ml.encoder._target_}
+    aggregator: ${ml.aggregator._target_}
+    head: ${ml.head._target_}
+    loss: ${ml.loss._target_}
+    lr: ${ml.optimizer.lr}
+    batch_size: ${datamodule.batch_size}
+    max_epochs: ${trainer.max_epochs}
+
+trainer:
+  max_epochs: 20

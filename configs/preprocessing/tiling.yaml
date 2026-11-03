@@ -1,0 +1,22 @@
+# @package _global_
+
+mpp: ???
+tile_extent: ???
+stride: ???
+data_name: ???
+
+metadata:
+  run_name: BRC Grading Tiling ${dataset.name}
+  description: |
+    Tiling experiment config that sets `tile_extent` and `stride` for slide tiling.
+    The tiling pipeline:
+    * reads slide metadata and builds a grid of tiles with the given stride
+    * assigns tissue/epithelium/QC mask paths and computes overlap scores
+    * keeps tiles with tissue in the centered 50% ROI
+    * computes full-tile overlaps for epithelium, blur, folding, and residual masks
+    * saves slide and tile datasets via MLflow
+  hyperparams:
+    mpp: ${mpp}
+    tile_extent: ${tile_extent}
+    stride: ${stride}
+    data_name: ${data_name}

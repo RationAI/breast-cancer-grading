@@ -1,0 +1,12 @@
+_target_: ml.models.GradingModule
+
+# Swappable pieces — populated by the experiment's defaults list
+# (ml/encoder, ml/aggregator, ml/head, ml/loss, ml/optimizer, ml/lr_scheduler,
+#  ml/metrics).
+encoder: ???
+aggregator: ???
+head: ???
+loss: ???
+optimizer: ???
+lr_scheduler: ???
+metrics: ???

@@ -1,0 +1,36 @@
+# @package _global_
+# Attention MIL over frozen Virchow2 embeddings — the BRC grading baseline.
+defaults:
+  - /ml: module
+  - /ml/encoder@ml.encoder: identity
+  - /ml/aggregator@ml.aggregator: attention
+  - /ml/head@ml.head: linear
+  - /ml/loss@ml.loss: cross_entropy
+  - /ml/optimizer@ml.optimizer: adam
+  - /ml/lr_scheduler@ml.lr_scheduler: reduce_lr_on_plateau
+  - /ml/metrics:
+      - multiclass_accuracy
+      - multiclass_auroc
+      - multiclass_f1
+      - quadratic_kappa
+      - confusion_matrix
+  - /trainer: default
+  - /data: grading
+  - _self_
+
+feature_dim: 2560  # Virchow2 embedding size
+
+metadata:
+  run_name: Attention MIL — Nottingham grading (Virchow2 embeddings)
+  description: |
+    Multiple-instance-learning grading of breast carcinoma slides (4 classes:
+    no tumour epithelium, G1, G2, G3) over frozen per-slide Virchow2 tile
+    embeddings, gated-attention pooling + linear head.
+  hyperparameters:
+    encoder: ${ml.encoder._target_}
+    aggregator: ${ml.aggregator._target_}
+    head: ${ml.head._target_}
+    loss: ${ml.loss._target_}
+    lr: ${ml.optimizer.lr}
+    batch_size: ${datamodule.batch_size}
+    max_epochs: ${trainer.max_epochs}

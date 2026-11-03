@@ -1,0 +1,3 @@
+# Parameter-free MIL baseline.
+_target_: ml.models.aggregators.MeanAggregator
+feature_dim: ${feature_dim}

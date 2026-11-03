@@ -1,0 +1,25 @@
+# @package _global_
+# Real bc20-24 grading data — per-slide Virchow2 embeddings from
+# preprocessing/embeddings.py + a labels CSV (see README, "Labels").
+dataset:
+  name: bc20-24
+  paths:
+    embeddings_dir: ???  # dir with one <slide_id>.parquet per slide (embeddings run output)
+    labels: ???         # CSV: slide_id, grade, split
+
+datamodule:
+  _target_: ml.data.DataModule
+  batch_size: 8
+  num_workers: 4
+  class_balanced: true
+  train: &dataset
+    _target_: ml.data.datasets.GradingDataset
+    embeddings_dir: ${dataset.paths.embeddings_dir}
+    labels_csv: ${dataset.paths.labels}
+    split: train
+  val:
+    <<: *dataset
+    split: val
+  test:
+    <<: *dataset
+    split: test
