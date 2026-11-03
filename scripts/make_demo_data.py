@@ -42,7 +42,7 @@ def main() -> None:
     direction = np.zeros(EMBEDDING_DIM)
     direction[:8] = 1.0
     direction /= np.linalg.norm(direction)
-    centers = {g: (g - 1.5) * 3.0 * direction for g in GRADE_NAMES}
+    centers = {g: (g - 1.5) * 6.0 * direction for g in GRADE_NAMES}
 
     rows: list[dict[str, object]] = []
     embeddings_dir = OUTPUT_DIR / "embeddings"
@@ -65,8 +65,8 @@ def main() -> None:
             )
 
             n_tiles = int(rng.integers(*TILES_PER_SLIDE))
-            slide_mean = centers[grade] + rng.normal(0, 0.5, EMBEDDING_DIM)
-            tiles = slide_mean + rng.normal(0, 1.0, (n_tiles, EMBEDDING_DIM))
+            slide_mean = centers[grade] + rng.normal(0, 0.3, EMBEDDING_DIM)
+            tiles = slide_mean + rng.normal(0, 0.5, (n_tiles, EMBEDDING_DIM))
 
             frame = pd.DataFrame(
                 {

@@ -34,4 +34,4 @@ metadata:
     max_epochs: ${trainer.max_epochs}
 
 trainer:
-  max_epochs: 20
+  max_epochs: 60

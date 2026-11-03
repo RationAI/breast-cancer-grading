@@ -35,7 +35,7 @@ uv sync            # or: uv sync --extra job   (adds kube-jobs submission)
 
 ```bash
 uv run python scripts/make_demo_data.py   # data/demo/{labels.csv, embeddings/}
-uv run -m ml.train +experiment=ml/demo    # trains ~20 epochs, tests best.ckpt
+uv run -m ml.train +experiment=ml/demo    # trains up to 60 epochs, tests best.ckpt
 ```
 
 ## Usage
