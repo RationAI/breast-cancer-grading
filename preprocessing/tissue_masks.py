@@ -1,5 +1,4 @@
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import cast
 
 import hydra
@@ -38,20 +37,31 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     df = pd.read_csv(config.dataset.paths.data_mapping)
     slides = [Path(path) for path in df["path"]]  # paths already include .mrxs
 
-    with TemporaryDirectory() as output_dir:
-        process_items(
-            slides,
-            process_item=process_slide,
-            fn_kwargs={
-                "level": config.level,
-                "output_path": Path(output_dir),
-            },
-            max_concurrent=config.max_concurrent,
-        )
+    output_dir = Path(config.output_path)
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-        logger.log_artifacts(
-            local_dir=output_dir, artifact_path=config.mlflow_artifact_path
-        )
+    # Skip already-processed slides
+    unprocessed = [
+        s for s in slides if not (output_dir / (s.stem + ".tiff")).exists()
+    ]
+    if not unprocessed:
+        print("All tissue masks already exist. Nothing to do.")
+        return
+    print(f"Processing {len(unprocessed)}/{len(slides)} slides")
+
+    process_items(
+        unprocessed,
+        process_item=process_slide,
+        fn_kwargs={
+            "level": config.level,
+            "output_path": output_dir,
+        },
+        max_concurrent=config.max_concurrent,
+    )
+
+    logger.log_artifacts(
+        local_dir=str(output_dir), artifact_path=config.mlflow_artifact_path
+    )
 
     log_provenance(
         logger=logger, config=config

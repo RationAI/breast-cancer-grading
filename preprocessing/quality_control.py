@@ -1,126 +1,47 @@
+"""QC mask generation using rationai-sdk AsyncClient.
+
+Uses the new QC service (v0.2.3) with pre-computed tissue masks.
+Skips slides that already have output masks.
+"""
+
 import asyncio
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import hydra
+import mlflow
 import pandas as pd
-from aiohttp import ClientSession, ClientTimeout
 from omegaconf import DictConfig
+from rationai import AsyncClient
 from rationai.mlkit import autolog, with_cli_args
 from rationai.mlkit.lightning.loggers import MLFlowLogger
 from rationai.provenance import log_provenance
+from rationai.types import SlideCheckConfig
+from tqdm import tqdm
+
+# One representative output file per slide — if it exists, the slide is done.
+MARKER_FILE = "ResidualArtifactsAndCoverage_coverage_mask_{stem}.tiff"
 
 
-async def put_request(
-    session: ClientSession,
-    url: str,
-    semaphore: asyncio.Semaphore,
-    request_timeout: int,
-    data: dict[str, Any],
-) -> tuple[int, str]:
-    """Execute a PUT request with timeout handling."""
-    timeout = ClientTimeout(total=request_timeout)
-
-    try:
-        async with (
-            semaphore,
-            session.put(url, json=data, timeout=timeout) as response,
-        ):
-            result = await response.text()
-
-            print(
-                f"Processed {data['wsi_path']}:\n\tStatus: {response.status} \n\tResponse: {result}\n"
-            )
-
-            return response.status, result
-    except TimeoutError:
-        slide_name = Path(data["wsi_path"]).name
-        print(
-            f"Request to {url} timed out after {request_timeout} seconds. Slide: {slide_name}"
-        )
-        return -1, "Timeout"
-    except Exception as exc:
-        slide_name = Path(data.get("wsi_path", "<unknown>")).name
-        print(f"Request to {url} failed for {slide_name}: {exc}")
-        return -1, str(exc)
-
-
-async def repeatable_put_request(
-    session: ClientSession,
-    url: str,
-    data: dict[str, Any],
-    num_repeats: int,
-    semaphore: asyncio.Semaphore,
-    request_timeout: int,
-) -> None:
-    """Execute a PUT request with retry logic for handling failures."""
-    for attempt in range(1, num_repeats + 1):
-        status, text = await put_request(session, url, semaphore, request_timeout, data)
-
-        if status == -1 and text == "Timeout":
-            return
-
-        if status == 500 and "Internal Server Error" in text:
-            att_count = f"attempt {attempt}/{num_repeats}"
-            print(
-                f"Unexpected status 500 received for {data.get('wsi_path', '<unknown>')} ({att_count}):\n\tResponse: {text}\n"
-            )
-            await asyncio.sleep(2**attempt)
-
-            continue
-
-        print(
-            f"Processed {data.get('wsi_path', '<unknown>')}:\n\tStatus: {status} \n\tResponse: {text}\n"
-        )
-
+def download_tissue_masks(artifact_uri: str, local_dir: Path) -> None:
+    """Download tissue masks from MLflow if not already present locally."""
+    if local_dir.exists() and any(local_dir.iterdir()):
+        print(f"Tissue masks already present in {local_dir}, skipping download.")
         return
+    local_dir.mkdir(exist_ok=True, parents=True)
+    print(f"Downloading tissue masks from {artifact_uri}...")
+    mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri, local_dir=str(local_dir))
+    print(f"Downloaded {len(list(local_dir.iterdir()))} tissue masks.")
 
-    print(
-        f"Failed to process {data.get('wsi_path', '<unknown>')}:\n\tAll retry attempts failed\n"
-    )
 
-
-async def generate_report(
-    session: ClientSession,
-    report_request_timeout: int,
-    slides: list[Path],
-    output_dir: str,
-    save_location: str,
-    url: str,
-    semaphore: asyncio.Semaphore,
-    compute_metrics: bool,
-) -> None:
-    """Generate quality control report for all processed slides."""
-    url = url + "report"
-
-    data = {
-        "backgrounds": slides,
-        "mask_dir": output_dir,
-        "save_location": save_location,
-        "compute_metrics": compute_metrics,
-    }
-
-    try:
-        async with (
-            semaphore,
-            session.put(
-                url,
-                json=data,
-                timeout=ClientTimeout(total=report_request_timeout),
-            ) as response,
-        ):
-            result = await response.text()
-
-            print(
-                f"Report generation:\n\tStatus: {response.status} \n\tResponse: {result}\n"
-            )
-    except TimeoutError:
-        print(
-            f"Report generation request to {url} timed out after {report_request_timeout} seconds."
-        )
-    except Exception as exc:
-        print(f"Report generation request to {url} failed: {exc}")
+def filter_unprocessed(slides: list[Path], output_path: Path) -> list[Path]:
+    """Return only slides that don't already have output masks."""
+    unprocessed = []
+    for slide in slides:
+        marker = output_path / MARKER_FILE.format(stem=slide.stem)
+        if not marker.exists():
+            unprocessed.append(slide)
+    return unprocessed
 
 
 async def qc_main(
@@ -128,43 +49,57 @@ async def qc_main(
     slides: list[Path],
     report_path: str,
     logger: MLFlowLogger,
-    semaphore: asyncio.Semaphore,
 ) -> None:
-    """Main async function to orchestrate quality control checks for all slides."""
-    output_path = config.output_path
+    """Run QC checks on all slides and generate a report."""
+    output_path = Path(config.output_path)
     url = config.url
 
-    async with ClientSession() as session:
-        tasks = [
-            repeatable_put_request(
-                session=session,
-                request_timeout=config.request_timeout,
-                url=url,
-                num_repeats=config.num_repeats,
-                semaphore=semaphore,
-                data={
-                    "wsi_path": str(slide),
-                    "output_path": output_path,
-                    "mask_level": config.mask_level,
-                    "sample_level": config.sample_level,
-                    "check_residual": True,
-                    "check_folding": True,
-                    "check_blur": True,
-                },
-            )
-            for slide in slides
-        ]
+    # Download tissue masks from MLflow if available
+    tissue_mask_uri = config.get("tissue_mask_artifact_uri")
+    if tissue_mask_uri:
+        download_tissue_masks(tissue_mask_uri, Path(config.tissue_mask_dir))
 
-        await asyncio.gather(*tasks)
+    # Skip already-processed slides
+    slides = filter_unprocessed(slides, output_path)
+    if not slides:
+        print("All slides already processed. Nothing to do.")
+        return
 
-        await generate_report(
-            session=session,
-            slides=slides,
-            output_dir=output_path,
+    print(f"Processing {len(slides)} slides")
+
+    check_config = SlideCheckConfig(
+        check_residual=config.check_residual,
+        check_folding=config.check_folding,
+        check_blur=config.check_blur,
+        tissue_mask_dir=config.get("tissue_mask_dir"),
+    )
+
+    async with AsyncClient(qc_base_url=url, timeout=config.request_timeout) as client:
+        pbar = tqdm(total=len(slides), desc="QC slides", unit="slide")
+        results = []
+        async for result in client.qc.check_slides(
+            wsi_paths=slides,
+            output_path=output_path,
+            config=check_config,
+            timeout=config.request_timeout,
+            max_concurrent=config.request_limit,
+        ):
+            pbar.update(1)
+            results.append(result)
+        pbar.close()
+
+        # Log failures
+        failed = [r for r in results if not r.success]
+        if failed:
+            print(f"\n{len(failed)}/{len(results)} slides failed:")
+            for r in failed:
+                print(f"  {r.wsi_path}: {r.error}")
+
+        # Generate report
+        await client.qc.generate_report(
+            backgrounds=slides,
+            mask_dir=output_path,
             save_location=report_path,
-            url=url,
-            semaphore=semaphore,
-            report_request_timeout=config.report_request_timeout,
             compute_metrics=True,
         )
 
@@ -185,15 +120,12 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     output_path.mkdir(exist_ok=True, parents=True)
 
     df = pd.read_csv(config.dataset.paths.data_mapping)
-    slides = [Path(path) for path in df["path"]]  # paths already include .mrxs
-
-    semaphore = asyncio.Semaphore(config.request_limit)
+    slides = [Path(path) for path in df["path"]]
 
     with tempfile.TemporaryDirectory(
         prefix="qc_masks_report", dir=Path(config.project_path).as_posix()
     ) as tmp_dir:
         report_path = Path(tmp_dir) / "report.html"
-
         report_path.parent.mkdir(parents=True, exist_ok=True)
 
         asyncio.run(
@@ -202,14 +134,11 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
                 slides=slides,
                 report_path=report_path.absolute().as_posix(),
                 logger=logger,
-                semaphore=semaphore,
             )
         )
 
-    log_provenance(
-        logger=logger, config=config
-    )  # links this run to user, git, image, inputs
+    log_provenance(logger=logger, config=config)
 
 
 if __name__ == "__main__":
-    main()  # pylint: disable=no-value-for-parameter
+    main()
