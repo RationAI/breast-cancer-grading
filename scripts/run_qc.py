@@ -10,7 +10,7 @@ submit_job(
     script=[
         "git clone https://github.com/RationAI/breast-cancer-grading.git workdir",
         "cd workdir",
-        "uv sync",
+        "uv sync --frozen",
         "uv run -m preprocessing.quality_control",
     ],
     storage=[storage.secure.DATA, storage.secure.PROJECTS],
