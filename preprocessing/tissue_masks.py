@@ -36,7 +36,7 @@ def process_slide(slide_path: Path, level: int, output_path: Path) -> None:
 @autolog
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
     df = pd.read_csv(config.dataset.paths.data_mapping)
-    slides = [Path(path + ".mrxs") for path in df["path"]]
+    slides = [Path(path) for path in df["path"]]  # paths already include .mrxs
 
     with TemporaryDirectory() as output_dir:
         process_items(
