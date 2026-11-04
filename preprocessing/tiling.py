@@ -182,9 +182,8 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
 
     # Read slide paths from data mapping
     slide_labels_df = pd.read_csv(config.dataset.paths.data_mapping)
-    slide_labels_df["slide_path"] = slide_labels_df["path"] + ".mrxs"
-    slide_paths = slide_labels_df["slide_path"].tolist()
-    metadata_ds = rd.from_pandas(slide_labels_df[["slide_path", "grade", "case"]])
+    slide_paths = slide_labels_df["path"].tolist()  # paths already include .mrxs
+    metadata_ds = rd.from_pandas(slide_labels_df[["path", "grade", "case"]])
 
     print(f"\n[INFO] Processing {len(slide_paths)} slides using Ray Data pipeline\n")
 
@@ -197,7 +196,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     ).join(
         metadata_ds,
         on=("path",),
-        right_on=("slide_path",),
+        right_on=("path",),
         num_partitions=16,
         join_type="left_outer",
     )

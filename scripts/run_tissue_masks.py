@@ -13,5 +13,5 @@ submit_job(
         "uv sync",
         "uv run -m preprocessing.tissue_masks",
     ],
-    storage=[storage.secure.DATA, storage.secure.PROJECTS],
+    storage=[storage.secure.DATA, storage.secure.PROJECTS, storage.secure.BIOPTIC_TREE],
 )

@@ -6,7 +6,7 @@ dataset:
   name: bc20-24
   paths:
     qc_masks: ${project_path}/qc_masks
-    data_mapping: ???  # e.g. ${project_path}/data_mapping.csv
+    data_mapping: /mnt/projects/breast_cancer/brc_grading/data_mapping.csv  # e.g. ${project_path}/data_mapping.csv
   mlflow_uris:
     tissue_masks: null       # tissue-masks run artifact URI
     epithelium_masks: null   # epithelium-masks run artifact URI (optional)

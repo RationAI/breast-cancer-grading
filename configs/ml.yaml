@@ -19,5 +19,5 @@ feature_dim: ???  # tile-feature width = encoder.out_dim; set per experiment
 # Provenance — paste the values the registration printed (see README,
 # "Provenance"). Left null, training runs unverified (best effort).
 dataset:
-  run_id: null       # register_dataset's printed run_id — training verifies the disk against it
+  run_id: fe33f3af7b204a62923f1e2c6cb1034d       # register_dataset's printed run_id — training verifies the disk against it
   split_uris: null   # e.g. {train: 'mlflow-artifacts:/<exp_id>/<run_id>/artifacts/train.csv', test: '...'}

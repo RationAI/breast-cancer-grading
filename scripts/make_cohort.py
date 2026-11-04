@@ -38,6 +38,22 @@ from pathlib import Path
 RECORD_COL = "record"
 GRADE_COL = "grade"
 NEO_COL = "neoajuvant y/n"
+MORPHOLOGY_COL = "morphology"
+
+# BRC-A-11/15: the grading task is restricted to morphology code 8500.
+MORPHOLOGY_8500 = "8500"
+
+# BRC-A-20: rare/unsuitable slides excluded entirely before dataset creation.
+# Case-level entries drop the whole record; slide-level entries drop one slide.
+EXCLUDED_CASES = {
+    "2020_02716", "2020_04882", "2020_00857", "2020_01125", "2023_02823",
+    "2022_09552", "2024_00115", "2020_00781", "2020_02500",
+}
+EXCLUDED_SLIDES = {
+    "2020_00172-03-N", "2021_06248-10-T2", "2022_05492-1-N", "2022_09069-1-N",
+    "2021_08684-01-N", "2021_06115-02-N", "2022_07918-2-N", "2023_02864-2-T",
+    "2023_02503-3-T", "2021_03825-02-T",
+}
 
 # Slide-name suffixes. Tumour slides end in ``-T`` / ``-T<n>`` and carry the
 # case grade; normal slides end in ``-N`` / ``-N<n>`` and are class 0 (no
@@ -75,7 +91,10 @@ def read_records(path: Path) -> dict[str, int]:
     diagnosable.
     """
     cases: dict[str, int] = {}
-    skips = {"no_record": 0, "neoadjuvant": 0, "bad_grade": 0, "grade_9": 0}
+    skips = {
+        "no_record": 0, "excluded_case": 0, "morphology": 0,
+        "neoadjuvant": 0, "bad_grade": 0, "grade_9": 0,
+    }
     with path.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh, delimiter=";")
         fields = reader.fieldnames or []
@@ -83,6 +102,15 @@ def read_records(path: Path) -> dict[str, int]:
             record = (row.get(RECORD_COL) or "").strip()
             if not record:
                 skips["no_record"] += 1
+                continue
+            # BRC-A-20: rare/unsuitable cases excluded entirely.
+            if record in EXCLUDED_CASES:
+                skips["excluded_case"] += 1
+                continue
+            # BRC-A-11/15: morphology must be 8500 (normalize "8 500" -> "8500").
+            morphology = (row.get(MORPHOLOGY_COL) or "").replace(" ", "").strip()
+            if morphology != MORPHOLOGY_8500:
+                skips["morphology"] += 1
                 continue
             # Neoadjuvant cases are excluded (BRC-A-14/15).
             if (row.get(NEO_COL) or "").strip().lower() == "y":
@@ -153,6 +181,9 @@ def main() -> None:
             continue
         for slide in found:
             name = slide.stem  # e.g. 2019_08728-01-T (matches <slide_id>.parquet)
+            # BRC-A-20: drop specific rare/unsuitable slides.
+            if name in EXCLUDED_SLIDES:
+                continue
             if TUMOUR_RE.search(name):
                 slide_grade = grade
             elif NORMAL_RE.search(name):
@@ -167,7 +198,7 @@ def main() -> None:
                     "case": record,
                     "grade": slide_grade,
                     "slide_id": name,
-                    "path": str(slide.with_suffix("")),
+                    "path": str(slide),  # full path with .mrxs (register_dataset verifies existence)
                 }
             )
 

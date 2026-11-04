@@ -3,8 +3,8 @@ defaults:
   - logger: mlflow
   - _self_
 
-data_path: /mnt/data/MOU/breast/grading  # TODO: raw bc20-24 WSI data root
-project_path: /mnt/projects/brc-grading   # TODO: project folder (cohort CSV, labels, outputs)
+data_path: /mnt/bioptic_tree
+project_path: /mnt/projects/brc_grading
 
 metadata:
   experiment_name: BRC Grading
