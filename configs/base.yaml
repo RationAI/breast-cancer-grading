@@ -4,7 +4,7 @@ defaults:
   - _self_
 
 data_path: /mnt/bioptic_tree
-project_path: /mnt/projects/brc_grading
+project_path: /mnt/projects/breast_cancer/brc_grading
 
 metadata:
   experiment_name: BRC Grading
