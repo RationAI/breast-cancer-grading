@@ -11,7 +11,7 @@ submit_job(
         "git clone https://github.com/RationAI/breast-cancer-grading.git workdir",
         "cd workdir",
         "uv sync",
-        "uv run python -c \"from rationai.provenance import register_dataset; print(register_dataset(csv='/mnt/data/.../cohort.csv', path_column='path', dataset_name='bc20-24', experiment_name='BRC Grading'))\"",
+        "uv run python -c \"from rationai.provenance import register_dataset; print(register_dataset(csv='/mnt/projects/breast_cancer/brc_grading/data_mapping.csv', path_column='path', dataset_name='bc20-24', experiment_name='BRC Grading'))\"",
     ],
-    storage=[storage.secure.DATA, storage.secure.PROJECTS],
+    storage=[storage.secure.DATA, storage.secure.PROJECTS, storage.secure.BIOPTIC_TREE],
 )
