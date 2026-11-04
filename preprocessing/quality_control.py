@@ -30,7 +30,7 @@ def download_tissue_masks(artifact_uri: str, local_dir: Path) -> None:
         return
     local_dir.mkdir(exist_ok=True, parents=True)
     print(f"Downloading tissue masks from {artifact_uri}...")
-    mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri, local_dir=str(local_dir))
+    mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri, dst_path=str(local_dir))
     print(f"Downloaded {len(list(local_dir.iterdir()))} tissue masks.")
 
 
