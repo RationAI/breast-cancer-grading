@@ -20,7 +20,8 @@ from rationai.types import SlideCheckConfig
 from tqdm import tqdm
 
 # One representative output file per slide — if it exists, the slide is done.
-MARKER_FILE = "ResidualArtifactsAndCoverage_coverage_mask_{stem}.tiff"
+MARKER_DIR = "ResidualArtifactsAndCoverage/artifacts_coverage"
+MARKER_FILE = "{stem}.tiff"
 
 
 def download_tissue_masks(artifact_uri: str, local_dir: Path) -> None:
@@ -37,9 +38,10 @@ def download_tissue_masks(artifact_uri: str, local_dir: Path) -> None:
 
 def filter_unprocessed(slides: list[Path], output_path: Path) -> list[Path]:
     """Return only slides that don't already have output masks."""
+    marker_dir = output_path / MARKER_DIR
     unprocessed = []
     for slide in slides:
-        marker = output_path / MARKER_FILE.format(stem=slide.stem)
+        marker = marker_dir / MARKER_FILE.format(stem=slide.stem)
         if not marker.exists():
             unprocessed.append(slide)
     return unprocessed
