@@ -191,7 +191,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             epithelium_masks_path=epithelium_masks_path,
         ),
         num_cpus=0.2,
-        memory=512 * 1024**2,
+        memory=768 * 1024**2,
     )
 
     # ROI definitions
