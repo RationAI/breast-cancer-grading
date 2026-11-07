@@ -44,15 +44,15 @@ def compute_overlaps_batch(
     batch: DataBatch,
     tissue_roi: Any,
     full_roi: Any,
+    *,
+    compute_tissue: bool = True,
+    compute_qc: bool = True,
 ) -> DataBatch:
-    """Compute ALL mask overlaps for a batch of tiles in one pass.
-
-    Instead of chaining 4 sequential Ray Dataset stages (tissue, blur, folding, residual),
-    this single UDF reads all masks per tile and computes overlap scores in one shot.
-    """
+    """Compute tissue and/or QC mask overlaps for a batch of tiles."""
     # Normalize to pandas (Ray may yield pyarrow Table even with batch_format="pandas")
     if isinstance(batch, pa.Table):
         batch = batch.to_pandas()
+    batch = batch.reset_index(drop=True)
 
     tile_x = pa.array(batch["tile_x"])
     tile_y = pa.array(batch["tile_y"])
@@ -65,6 +65,11 @@ def compute_overlaps_batch(
         ("folding_mask_path", full_roi, "folding_overlap", "255"),
         ("residual_mask_path", full_roi, "residual_overlap", "0"),
     ]:
+        if (path_col == "tissue_mask_path" and not compute_tissue) or (
+            path_col != "tissue_mask_path" and not compute_qc
+        ):
+            continue
+
         paths = pa.array(batch[path_col])
         # Skip empty paths
         if all(p == "" or p is None for p in paths.to_pylist()):
@@ -171,7 +176,7 @@ def tiling(
 @autolog
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
     if not ray.is_initialized():
-        ray.init()
+        ray.init(num_cpus=16)
 
     tissue_masks_path = (
         None
@@ -184,6 +189,8 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         else download_artifacts(config.dataset.mlflow_uris.epithelium_masks)
     )
     qc_masks_path = config.dataset.paths.qc_masks or None
+    if tissue_masks_path is None:
+        raise ValueError("Tissue masks are required for tiling")
 
     # Read slide paths from data mapping
     slide_labels_df = pd.read_csv(config.dataset.paths.data_mapping)
@@ -209,7 +216,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     # Create unique slide IDs and save slide metadata
     slides = slides.map(row_hash, num_cpus=0.1, memory=256 * 1024**2)
 
-    # Expand slides into tile coordinates (no repartition — map_batches handles batching)
+    # Generate the coordinate grid without flooding the object store.
     tiles = slides.flat_map(
         partial(
             tiling,
@@ -219,7 +226,8 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         ),
         num_cpus=0.2,
         memory=768 * 1024**2,
-    )
+        concurrency=2,
+    ).repartition(target_num_rows_per_block=BATCH_SIZE)
 
     # ROI definitions
     offset = config.tile_extent // 4
@@ -227,17 +235,33 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     tissue_roi = box(offset, offset, offset + size, offset + size)
     full_roi = box(0, 0, config.tile_extent, config.tile_extent)
 
-    # Single-pass: compute ALL overlaps in one UDF per batch
+    # Discard background coordinates before reading the three QC masks.
     tiles = tiles.map_batches(
-        partial(compute_overlaps_batch, tissue_roi=tissue_roi, full_roi=full_roi),
+        partial(
+            compute_overlaps_batch,
+            tissue_roi=tissue_roi,
+            full_roi=full_roi,
+            compute_qc=False,
+        ),
         batch_format="pandas",
         batch_size=BATCH_SIZE,
         num_cpus=1,
         memory=768 * 1024**2,
     )
-
-    # Filter tiles with no tissue
     tiles = tiles.filter(expr=col("tissue_overlap") > 0.0)
+
+    tiles = tiles.map_batches(
+        partial(
+            compute_overlaps_batch,
+            tissue_roi=tissue_roi,
+            full_roi=full_roi,
+            compute_tissue=False,
+        ),
+        batch_format="pandas",
+        batch_size=BATCH_SIZE,
+        num_cpus=1,
+        memory=768 * 1024**2,
+    )
 
     # Add epithelium overlap if configured
     if config.dataset.mlflow_uris.epithelium_masks is not None:

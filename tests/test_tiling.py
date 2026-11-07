@@ -15,7 +15,16 @@ def fake_tile_overlay(_roi, paths, *_args):
         raise OpenSlideError("unreadable test mask")
     if "" in paths.to_pylist():
         raise OpenSlideError("empty test mask path")
-    return [np.ma.ones((1, 1, 1), dtype=np.uint8) for _ in paths]
+    return [
+        np.ma.array(
+            np.full(
+                (1, 1, 1),
+                0 if path == "background.tiff" else 1,
+                dtype=np.uint8,
+            )
+        )
+        for path in paths.to_pylist()
+    ]
 
 
 batch = pd.DataFrame(
@@ -54,4 +63,41 @@ for column in [
     assert result.loc[2, column] == 0.0
 
 assert stdout.getvalue().count("bad.tiff") == 4
-print("Mask error handling test passed")
+
+staged_batch = pd.DataFrame(
+    {
+        "tile_x": [0, 1],
+        "tile_y": [0, 1],
+        "mpp_x": [0.5, 0.5],
+        "mpp_y": [0.5, 0.5],
+        **{
+            column: ["background.tiff", "tissue.tiff"]
+            for column in [
+                "tissue_mask_path",
+                "blur_mask_path",
+                "folding_mask_path",
+                "residual_mask_path",
+            ]
+        },
+    }
+)
+with patch("preprocessing.tiling._tile_overlay", side_effect=fake_tile_overlay):
+    tissue_result = compute_overlaps_batch(
+        staged_batch.copy(), object(), object(), compute_qc=False
+    )
+    assert tissue_result["tissue_overlap"].tolist() == [0.0, 1.0]
+    assert "blur_overlap" not in tissue_result
+
+    retained = tissue_result.loc[tissue_result["tissue_overlap"] > 0.0].copy()
+    assert len(retained) == 1
+    assert retained.index.tolist() == [1]  # Verify nonconsecutive indices are safe.
+    qc_result = compute_overlaps_batch(
+        retained, object(), object(), compute_tissue=False
+    )
+    assert qc_result["tissue_overlap"].tolist() == [1.0]
+    assert all(
+        qc_result[column].tolist() == [1.0]
+        for column in ["blur_overlap", "folding_overlap", "residual_overlap"]
+    )
+
+print("Mask error handling and tissue-before-QC tests passed")
