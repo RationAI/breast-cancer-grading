@@ -293,6 +293,7 @@ dependencies = [
     { name = "rationai-mlkit" },
     { name = "rationai-provenance" },
     { name = "rationai-sdk" },
+    { name = "rationai-tiling" },
     { name = "ratiopath" },
     { name = "timm" },
     { name = "torch" },
@@ -324,6 +325,7 @@ requires-dist = [
     { name = "rationai-mlkit", git = "https://github.com/RationAI/mlkit.git" },
     { name = "rationai-provenance", git = "https://github.com/RationAI/provenance.git" },
     { name = "rationai-sdk", git = "https://github.com/RationAI/rationai-sdk-python.git?branch=feature%2Fupdate-qc-api" },
+    { name = "rationai-tiling", git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/tiling.git" },
     { name = "ratiopath", specifier = ">=1.5.0" },
     { name = "timm" },
     { name = "torch", specifier = ">=2.9.0" },
@@ -2700,6 +2702,21 @@ dependencies = [
     { name = "numpy" },
     { name = "pillow" },
     { name = "tenacity" },
+]
+
+[[package]]
+name = "rationai-tiling"
+version = "1.1.1"
+source = { git = "https://gitlab.ics.muni.cz/rationai/digital-pathology/libraries/tiling.git#475e7938e9a7230b378fca1c67106eda84f69c85" }
+dependencies = [
+    { name = "mlflow" },
+    { name = "numpy" },
+    { name = "openslide-python" },
+    { name = "pandas" },
+    { name = "pyvips" },
+    { name = "rationai-masks" },
+    { name = "ray" },
+    { name = "tqdm" },
 ]
 
 [[package]]
