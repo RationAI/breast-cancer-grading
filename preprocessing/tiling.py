@@ -123,11 +123,9 @@ def tiling(
 
     if qc_masks_path:
         qc_path = Path(qc_masks_path)
-        blur_mask = str(qc_path / f"Piqe_piqe_median_activity_mask_{tiff_slide_name}")
-        folding_mask = str(qc_path / f"FoldingFunction_folding_test_{tiff_slide_name}")
-        residual_mask = str(
-            qc_path / f"ResidualArtifactsAndCoverage_coverage_mask_{tiff_slide_name}"
-        )
+        blur_mask = str(qc_path / "Piqe/blur_score_per_pixel" / tiff_slide_name)
+        folding_mask = str(qc_path / "FoldingFunction/folding_per_pixel" / tiff_slide_name)
+        residual_mask = str(qc_path / "ResidualArtifactsAndCoverage/artifacts_coverage" / tiff_slide_name)
     else:
         blur_mask = ""
         folding_mask = ""
