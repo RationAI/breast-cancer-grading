@@ -8,5 +8,5 @@ dataset:
     qc_masks: ${project_path}/qc_masks
     data_mapping: /mnt/projects/breast_cancer/brc_grading/data_mapping.csv  # e.g. ${project_path}/data_mapping.csv
   mlflow_uris:
-    tissue_masks: null       # tissue-masks run artifact URI
+    tissue_masks: mlflow-artifacts:/82/b42693221ada416aaf8c67ca61c01810/artifacts/tissue_masks  # tissue-masks run artifact URI
     epithelium_masks: null   # epithelium-masks run artifact URI (optional)

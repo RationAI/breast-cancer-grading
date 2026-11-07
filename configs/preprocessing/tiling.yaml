@@ -1,9 +1,9 @@
 # @package _global_
 
-mpp: ???
-tile_extent: ???
-stride: ???
-data_name: ???
+mpp: 1.0
+tile_extent: 224
+stride: 224
+data_name: bc20-24
 
 metadata:
   run_name: BRC Grading Tiling ${dataset.name}
