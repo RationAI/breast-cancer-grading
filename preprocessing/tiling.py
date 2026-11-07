@@ -199,7 +199,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     # Single-pass: compute ALL overlaps in one UDF per batch
     tiles = tiles.map_batches(
         partial(compute_overlaps_batch, tissue_roi=tissue_roi, full_roi=full_roi),
-        batch_format="pyarrow",
+        batch_format="pandas",
         batch_size=BATCH_SIZE,
         num_cpus=1,
         memory=BATCH_SIZE * 8 * 512**2,  # ~512MB per worker
@@ -213,7 +213,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         epi_roi = full_roi
         tiles = tiles.map_batches(
             partial(compute_overlaps_batch, tissue_roi=epi_roi, full_roi=epi_roi),
-            batch_format="pyarrow",
+            batch_format="pandas",
             batch_size=BATCH_SIZE,
             num_cpus=1,
             memory=BATCH_SIZE * 8 * 512**2,
