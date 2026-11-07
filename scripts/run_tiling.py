@@ -4,7 +4,7 @@ from kube_jobs import storage, submit_job
 submit_job(
     job_name="brc-grading-tiling-bc20-24-224",
     image="cerit.io/rationai/base:2.0.6",
-    cpu=32,
+    cpu=16,
     memory="64Gi",
     public=False,
     script=[

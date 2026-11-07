@@ -7,6 +7,8 @@ from typing import Any
 import hydra
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import ray
 import ray.data as rd
 from mlflow.artifacts import download_artifacts
@@ -16,89 +18,63 @@ from rationai.mlkit.lightning.loggers import MLFlowLogger
 from rationai.provenance import log_provenance
 from rationai.tiling.writers import save_mlflow_dataset
 from ratiopath.ray import read_slides
-from ratiopath.tiling import grid_tiles, tile_overlay_overlap
+from ratiopath.tiling import grid_tiles
+from ratiopath.tiling.overlays import _tile_overlay
 from ratiopath.tiling.utils import row_hash
 from ray.data import Dataset
 from ray.data.block import DataBatch
 from ray.data.expressions import col
 from shapely.geometry import box
-from shapely.geometry.polygon import Polygon
 
 
 BATCH_SIZE = 256
 
 
-def add_tile_overlap(
-    tiles: Dataset,
-    roi: Polygon,
-    path_col: str,
-    overlap_col: str,
-    struct_field: str,
-) -> Dataset:
-    """Compute per-tile overlap score against a mask overlay.
+def _overlap_fraction(masked: np.ma.MaskedArray, field: str) -> float:
+    """Compute overlap = 1 - fraction of pixels matching the field value."""
+    valid = masked.count()
+    if valid == 0:
+        return 0.0
+    field_val = int(field)
+    count = (masked.compressed() == field_val).sum()
+    return 1.0 - (count / valid)
 
-    This helper uses `tile_overlay_overlap` to compute, for each tile,
-    how much of the given ROI (tile sub-region) overlaps a binary mask.
 
-    The mask file path is read from the column ``path_col`` in the Ray Dataset. The
-    function expects the dataset to contain tile coordinates and microns-per-pixel columns
-    (``tile_x``, ``tile_y``, ``mpp_x``, ``mpp_y``), as produced by the upstream tiling
-    pipeline.
+def compute_overlaps_batch(
+    batch: DataBatch,
+    tissue_roi: Any,
+    full_roi: Any,
+) -> DataBatch:
+    """Compute ALL mask overlaps for a batch of tiles in one pass.
 
-    Parameters
-    ----------
-    tiles:
-        Ray Dataset with tile rows and required coordinate columns.
-    roi:
-        ROI (in tile pixel coordinates) used when computing the overlap.
-        For example, to check tissue in the center of a tile, use a centered box.
-    path_col:
-        Column name containing the mask image path for each tile.
-    overlap_col:
-        Name of the output column to store the computed overlap score in [0, 1].
-    struct_field:
-        The pixel value (as string: "0" or "255") in the binary mask representing the
-        undesired artifact or background. The mask contains only values 0 and 255.
-        The overlap is computed as ``1 - (fraction of pixels with this value)``, yielding
-        the fraction of desired (non-artifact) pixels.
-        For example, when folding masks have folds as white (255), pass "255" to compute
-        the amount of non-folded tissue.
-
-    Returns:
-    -------
-    Dataset
-        The input dataset with an additional float column ``overlap_col``.
+    Instead of chaining 4 sequential Ray Dataset stages (tissue, blur, folding, residual),
+    this single UDF reads all masks per tile and computes overlap scores in one shot.
     """
-    overlap_struct_col = f"_{overlap_col}_struct"
-    overlap_struct = tile_overlay_overlap(
-        roi,
-        col(path_col),
-        col("tile_x"),
-        col("tile_y"),
-        col("mpp_x"),
-        col("mpp_y"),
-    )
-    tiles = tiles.with_column(
-        overlap_struct_col, overlap_struct, num_cpus=1, memory=BATCH_SIZE * 8 * 512**2
-    )
+    tile_x = pa.array(batch["tile_x"])
+    tile_y = pa.array(batch["tile_y"])
+    mpp_x = pa.array(batch["mpp_x"])
+    mpp_y = pa.array(batch["mpp_y"])
 
-    def extract_value(batch: DataBatch) -> DataBatch:
-        batch[overlap_col] = np.array(
-            [
-                1.0 - (s.get(struct_field, 1.0) or 1.0) if isinstance(s, dict) else 0.0
-                for s in batch[overlap_struct_col]
-            ]
+    for path_col, roi, out_col, field in [
+        ("tissue_mask_path", tissue_roi, "tissue_overlap", "0"),
+        ("blur_mask_path", full_roi, "blur_overlap", "255"),
+        ("folding_mask_path", full_roi, "folding_overlap", "255"),
+        ("residual_mask_path", full_roi, "residual_overlap", "0"),
+    ]:
+        paths = pa.array(batch[path_col])
+        # Skip empty paths
+        if all(p == "" or p is None for p in paths.to_pylist()):
+            batch[out_col] = np.zeros(len(batch["tile_x"]), dtype=np.float32)
+            continue
+
+        with_overlay = _tile_overlay(roi, paths, tile_x, tile_y, mpp_x, mpp_y)
+        overlaps = np.array(
+            [_overlap_fraction(m, field) for m in with_overlay],
+            dtype=np.float32,
         )
-        return batch
+        batch[out_col] = overlaps
 
-    tiles = tiles.map_batches(
-        extract_value,
-        batch_format="pandas",
-        num_cpus=1,
-        memory=BATCH_SIZE * 8 * 512**2,
-    )
-
-    return tiles.drop_columns([overlap_struct_col])
+    return batch
 
 
 def tiling(
@@ -180,7 +156,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
 
     # Read slide paths from data mapping
     slide_labels_df = pd.read_csv(config.dataset.paths.data_mapping)
-    slide_paths = slide_labels_df["path"].tolist()  # paths already include .mrxs
+    slide_paths = slide_labels_df["path"].tolist()
     metadata_ds = rd.from_pandas(slide_labels_df[["path", "grade", "case"]])
 
     print(f"\n[INFO] Processing {len(slide_paths)} slides using Ray Data pipeline\n")
@@ -202,7 +178,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     # Create unique slide IDs and save slide metadata
     slides = slides.map(row_hash, num_cpus=0.1, memory=128 * 1024**2)
 
-    # Expand slides into tile coordinates
+    # Expand slides into tile coordinates (no repartition — map_batches handles batching)
     tiles = slides.flat_map(
         partial(
             tiling,
@@ -211,46 +187,49 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             epithelium_masks_path=epithelium_masks_path,
         ),
         num_cpus=0.2,
-        memory=BATCH_SIZE * 1024**2,
-    ).repartition(target_num_rows_per_block=BATCH_SIZE)
+        memory=512 * 1024**2,
+    )
 
-    # Compute masks and filter tissue tiles
-    # Tissue mask checks center 50%
+    # ROI definitions
     offset = config.tile_extent // 4
     size = config.tile_extent // 2
     tissue_roi = box(offset, offset, offset + size, offset + size)
-    # Full tile
     full_roi = box(0, 0, config.tile_extent, config.tile_extent)
 
-    # Add tissue overlaps
-    tiles = add_tile_overlap(
-        tiles, tissue_roi, "tissue_mask_path", "tissue_overlap", "0"
+    # Single-pass: compute ALL overlaps in one UDF per batch
+    tiles = tiles.map_batches(
+        partial(compute_overlaps_batch, tissue_roi=tissue_roi, full_roi=full_roi),
+        batch_format="pyarrow",
+        batch_size=BATCH_SIZE,
+        num_cpus=1,
+        memory=BATCH_SIZE * 8 * 512**2,  # ~512MB per worker
     )
+
+    # Filter tiles with no tissue
     tiles = tiles.filter(expr=col("tissue_overlap") > 0.0)
-    tiles = add_tile_overlap(tiles, full_roi, "blur_mask_path", "blur_overlap", "255")
-    tiles = add_tile_overlap(
-        tiles, full_roi, "folding_mask_path", "folding_overlap", "255"
-    )
-    tiles = add_tile_overlap(
-        tiles, full_roi, "residual_mask_path", "residual_overlap", "0"
-    )
+
+    # Add epithelium overlap if configured
     if config.dataset.mlflow_uris.epithelium_masks is not None:
-        tiles = add_tile_overlap(
-            tiles, full_roi, "epithelium_mask_path", "epithelium_overlap", "0"
+        epi_roi = full_roi
+        tiles = tiles.map_batches(
+            partial(compute_overlaps_batch, tissue_roi=epi_roi, full_roi=epi_roi),
+            batch_format="pyarrow",
+            batch_size=BATCH_SIZE,
+            num_cpus=1,
+            memory=BATCH_SIZE * 8 * 512**2,
         )
 
-    # Drop unnecessary columns
-    tiles = tiles.drop_columns(
-        [
-            "tissue_mask_path",
-            "epithelium_mask_path",
-            "blur_mask_path",
-            "folding_mask_path",
-            "residual_mask_path",
-            "mpp_x",
-            "mpp_y",
-        ]
-    )
+    # Drop mask path columns no longer needed
+    drop_cols = [
+        "tissue_mask_path",
+        "epithelium_mask_path",
+        "blur_mask_path",
+        "folding_mask_path",
+        "residual_mask_path",
+        "mpp_x",
+        "mpp_y",
+    ]
+    tiles = tiles.drop_columns(drop_cols)
 
     # Convert Ray Datasets to pandas DataFrames
     slides_df = slides.to_pandas()
@@ -270,7 +249,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
 
     log_provenance(
         logger=logger, config=config
-    )  # links this run to user, git, image, inputs
+    )
 
 
 if __name__ == "__main__":
