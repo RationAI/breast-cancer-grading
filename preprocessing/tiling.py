@@ -234,9 +234,10 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     tiles = add_tile_overlap(
         tiles, full_roi, "residual_mask_path", "residual_overlap", "0"
     )
-    tiles = add_tile_overlap(
-        tiles, full_roi, "epithelium_mask_path", "epithelium_overlap", "0"
-    )
+    if config.dataset.mlflow_uris.epithelium_masks is not None:
+        tiles = add_tile_overlap(
+            tiles, full_roi, "epithelium_mask_path", "epithelium_overlap", "0"
+        )
 
     # Drop unnecessary columns
     tiles = tiles.drop_columns(
