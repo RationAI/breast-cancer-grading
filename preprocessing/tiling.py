@@ -227,7 +227,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         num_cpus=0.2,
         memory=768 * 1024**2,
         concurrency=2,
-    ).repartition(target_num_rows_per_block=BATCH_SIZE)
+    )
 
     # ROI definitions
     offset = config.tile_extent // 4
