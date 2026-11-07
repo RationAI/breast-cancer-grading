@@ -13,6 +13,7 @@ import ray
 import ray.data as rd
 from mlflow.artifacts import download_artifacts
 from omegaconf import DictConfig
+from openslide import OpenSlideError
 from rationai.mlkit import autolog, with_cli_args
 from rationai.mlkit.lightning.loggers import MLFlowLogger
 from rationai.provenance import log_provenance
@@ -21,7 +22,6 @@ from ratiopath.ray import read_slides
 from ratiopath.tiling import grid_tiles
 from ratiopath.tiling.overlays import _tile_overlay
 from ratiopath.tiling.utils import row_hash
-from ray.data import Dataset
 from ray.data.block import DataBatch
 from ray.data.expressions import col
 from shapely.geometry import box
@@ -71,11 +71,32 @@ def compute_overlaps_batch(
             batch[out_col] = np.zeros(len(batch["tile_x"]), dtype=np.float32)
             continue
 
-        with_overlay = _tile_overlay(roi, paths, tile_x, tile_y, mpp_x, mpp_y)
-        overlaps = np.array(
-            [_overlap_fraction(m, field) for m in with_overlay],
-            dtype=np.float32,
-        )
+        overlaps = np.zeros(len(batch["tile_x"]), dtype=np.float32)
+        for path, indices in batch.groupby(path_col, sort=False).indices.items():
+            if not path:
+                continue
+            index = pa.array(indices)
+            try:
+                with_overlay = _tile_overlay(
+                    roi,
+                    pc.take(paths, index),
+                    pc.take(tile_x, index),
+                    pc.take(tile_y, index),
+                    pc.take(mpp_x, index),
+                    pc.take(mpp_y, index),
+                )
+            except (OpenSlideError, OSError) as exc:
+                overlaps[indices] = np.nan
+                print(
+                    f"[ERROR] Cannot read {path_col} {str(path)!r}; "
+                    f"setting {out_col}=NaN for {len(indices)} tiles: {exc}",
+                    flush=True,
+                )
+                continue
+            overlaps[indices] = np.array(
+                [_overlap_fraction(m, field) for m in with_overlay],
+                dtype=np.float32,
+            )
         batch[out_col] = overlaps
 
     return batch
@@ -104,8 +125,14 @@ def tiling(
     if qc_masks_path:
         qc_path = Path(qc_masks_path)
         blur_mask = str(qc_path / "Piqe/blur_score_per_pixel" / tiff_slide_name)
-        folding_mask = str(qc_path / "FoldingFunction/folding_per_pixel" / tiff_slide_name)
-        residual_mask = str(qc_path / "ResidualArtifactsAndCoverage/artifacts_coverage" / tiff_slide_name)
+        folding_mask = str(
+            qc_path / "FoldingFunction/folding_per_pixel" / tiff_slide_name
+        )
+        residual_mask = str(
+            qc_path
+            / "ResidualArtifactsAndCoverage/artifacts_coverage"
+            / tiff_slide_name
+        )
     else:
         blur_mask = ""
         folding_mask = ""
@@ -180,7 +207,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     )
 
     # Create unique slide IDs and save slide metadata
-    slides = slides.map(row_hash, num_cpus=0.1, memory=128 * 1024**2)
+    slides = slides.map(row_hash, num_cpus=0.1, memory=256 * 1024**2)
 
     # Expand slides into tile coordinates (no repartition — map_batches handles batching)
     tiles = slides.flat_map(
@@ -206,7 +233,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         batch_format="pandas",
         batch_size=BATCH_SIZE,
         num_cpus=1,
-        memory=BATCH_SIZE * 8 * 512**2,  # ~512MB per worker
+        memory=768 * 1024**2,
     )
 
     # Filter tiles with no tissue
@@ -220,7 +247,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             batch_format="pandas",
             batch_size=BATCH_SIZE,
             num_cpus=1,
-            memory=BATCH_SIZE * 8 * 512**2,
+            memory=768 * 1024**2,
         )
 
     # Drop mask path columns no longer needed
@@ -251,9 +278,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
 
     ray.shutdown()
 
-    log_provenance(
-        logger=logger, config=config
-    )
+    log_provenance(logger=logger, config=config)
 
 
 if __name__ == "__main__":
