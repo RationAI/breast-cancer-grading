@@ -13,5 +13,5 @@ submit_job(
         "uv sync --frozen",
         "uv run -m preprocessing.tiling +experiment=preprocessing/tiling/bc20_24_224",
     ],
-    storage=[storage.secure.DATA, storage.secure.PROJECTS],
+    storage=[storage.secure.DATA, storage.secure.PROJECTS, storage.secure.BIOPTIC_TREE],
 )
