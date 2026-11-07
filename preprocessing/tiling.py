@@ -50,6 +50,10 @@ def compute_overlaps_batch(
     Instead of chaining 4 sequential Ray Dataset stages (tissue, blur, folding, residual),
     this single UDF reads all masks per tile and computes overlap scores in one shot.
     """
+    # Normalize to pandas (Ray may yield pyarrow Table even with batch_format="pandas")
+    if isinstance(batch, pa.Table):
+        batch = batch.to_pandas()
+
     tile_x = pa.array(batch["tile_x"])
     tile_y = pa.array(batch["tile_y"])
     mpp_x = pa.array(batch["mpp_x"])
