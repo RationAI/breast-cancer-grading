@@ -1,6 +1,6 @@
 # @package _global_
 
-mpp: 1.0
+mpp: 0.5
 tile_extent: 224
 stride: 224
 data_name: bc20-24
