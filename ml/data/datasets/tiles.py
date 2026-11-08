@@ -87,6 +87,8 @@ class SlideDataset(MetaTiledSlides[TilesPredictSample]):
         # Rename tile_x/tile_y to x/y if needed
         if "tile_x" in self.tiles.column_names:
             self.tiles = self.tiles.rename_columns({"tile_x": "x", "tile_y": "y"})
+        # The base-class filter reads _meta.tiles, so keep it in sync.
+        self._meta.tiles = self.tiles
 
         return (
             TileDataset(
