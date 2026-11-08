@@ -75,6 +75,9 @@ uv run -m preprocessing.embeddings +experiment=preprocessing/embeddings/virchow2
 Each step logs artifacts to MLflow and calls `log_provenance`. The tiling run
 prints the dataset URI for the embeddings run; paste it into
 `configs/experiment/preprocessing/embeddings/virchow2.yaml` (`dataset.path`).
+The current config selects the completed bc20-24 tiling dataset and excludes four
+slides with missing QC masks without changing the original tiling dataset. Update
+`dataset.path` and `dataset.exclude` appropriately after a new tiling run.
 
 ### Labels
 
@@ -139,7 +142,7 @@ All preprocessing and training runs submit as kube-jobs:
 uv run python scripts/run_tissue_masks.py
 uv run python scripts/run_qc.py
 uv run python scripts/run_tiling.py
-uv run python scripts/run_embeddings.py   # needs HF_TOKEN (Virchow2 weights)
+uv run --extra job python scripts/run_embeddings.py  # uses Kubernetes huggingface-secret (Virchow2 access)
 uv run python scripts/run_train.py
 ```
 

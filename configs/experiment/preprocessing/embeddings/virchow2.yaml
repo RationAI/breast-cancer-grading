@@ -1,5 +1,12 @@
 # @package _global_
 
 dataset:
-  name: mou_224  # the tiling run's data_name
-  path: ???      # slides/tiles dataset URI printed by the tiling run
+  name: bc20-24
+  path: mlflow-artifacts:/82/bef4e85173d24c3992fb171429c71fd6/artifacts/bc20-24
+  # Missing blur/folding masks in the source tiling run; do not produce embeddings
+  # for these slides. The original tiling dataset is left unchanged.
+  exclude:
+    - 2020_01089-02-T
+    - 2020_01166-01-N
+    - 2020_02743-02-T
+    - 2020_06097-01-N

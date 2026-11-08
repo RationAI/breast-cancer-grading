@@ -4,6 +4,7 @@ from typing import cast
 import albumentations as A
 import hydra
 import pandas as pd
+import pyarrow as pa
 import timm
 import torch
 from omegaconf import DictConfig
@@ -68,7 +69,20 @@ def save_embeddings(
         }
     )
 
-    df.to_parquet(embeddings_path, index=False, engine="pyarrow")
+    temporary_path = embeddings_path.with_suffix(".parquet.tmp")
+    try:
+        df.to_parquet(temporary_path, index=False, engine="pyarrow")
+        temporary_path.replace(embeddings_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def embeddings_are_complete(embeddings_path: Path, expected_rows: int) -> bool:
+    try:
+        metadata = pa.parquet.ParquetFile(embeddings_path).metadata
+        return metadata is not None and metadata.num_rows == expected_rows
+    except (OSError, pa.ArrowException):
+        return False
 
 
 @with_cli_args(["+preprocessing=embeddings"])
@@ -91,12 +105,19 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         ),
     )
 
+    excluded_slides = set(config.dataset.exclude)
+    failed_slides = []
+
     # Process each slide's tiles separately so embeddings can be saved per-slide
     for tile_dataset in tqdm(dataset.generate_datasets(), desc="Slides"):
         slide_name = tile_dataset.slide_path.stem
+        if slide_name in excluded_slides:
+            print(f"Skipping {slide_name}: incomplete QC masks")
+            continue
+
         embeddings_path = (dest / slide_name).with_suffix(".parquet")
 
-        if embeddings_path.exists():
+        if embeddings_are_complete(embeddings_path, len(tile_dataset)):
             print(f"Embeddings for slide {slide_name} already exist, skipping...")
             continue
 
@@ -133,7 +154,11 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             )
 
         except Exception as e:
+            failed_slides.append(slide_name)
             print(f"Error processing slide {slide_name}: {e}")
+
+    if failed_slides:
+        raise RuntimeError(f"Embedding failed for slides: {failed_slides}")
 
     logger.log_artifacts(str(dest), artifact_path="embeddings")
 

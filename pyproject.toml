@@ -16,7 +16,7 @@ dependencies = [
     "pyarrow",
     "datasets",
     "timm",
-    "albumentations",
+    "albumentationsx[headless]",
     "rationai-sdk>=0.1.0",
     "rationai-mlkit",
     "rationai-provenance",

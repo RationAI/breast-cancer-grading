@@ -128,25 +128,6 @@ wheels = [
 ]
 
 [[package]]
-name = "albumentations"
-version = "1.4.15"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "albucore" },
-    { name = "eval-type-backport" },
-    { name = "numpy" },
-    { name = "opencv-python-headless" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "scikit-image" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/be/42/dde113e604e96003fe364a652e9bfcb0b7b14a78a446031974ca5969b96d/albumentations-1.4.15.tar.gz", hash = "sha256:0e86c2e522f12c7f413d765d6095523b9e65a7bfe3d08fb9599d98a989093a48", size = 191408, upload-time = "2024-09-13T01:54:45.408Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2f/38/2011d955445737eb91d6e69c4309637b360f696040943b31b7a44ee6cc88/albumentations-1.4.15-py3-none-any.whl", hash = "sha256:dc941a2eb5a08361efa4eca55074a432d4986546fb6036731cd8763cf67d87bf", size = 200301, upload-time = "2024-09-13T01:54:43.865Z" },
-]
-
-[[package]]
 name = "albumentationsx"
 version = "2.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -162,6 +143,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/98/9b/56efe2ae2cd7d67e421cdbfe553c277bd6e2f2ace2ec29f4616197de0ea2/albumentationsx-2.5.1.tar.gz", hash = "sha256:ef7a15f7b443a7d55a023a4e24626aacdc0fc4c4488bfd859ac13ab98c2c703e", size = 842979, upload-time = "2026-10-11T18:16:38.151Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/63/afa051c95da7195bb6be0d6fdacc0878be9b785590eb48c3d44d64ab8755/albumentationsx-2.5.1-py3-none-any.whl", hash = "sha256:04614c531e7b88e0864ce015148165a4053810e784a66c02e4c6cf938829102f", size = 673126, upload-time = "2026-10-11T18:16:36.616Z" },
+]
+
+[package.optional-dependencies]
+headless = [
+    { name = "opencv-python-headless" },
 ]
 
 [[package]]
@@ -282,7 +268,7 @@ name = "breast-cancer-grading"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "albumentations" },
+    { name = "albumentationsx", extra = ["headless"] },
     { name = "datasets" },
     { name = "lightning" },
     { name = "mlflow" },
@@ -314,7 +300,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "albumentations" },
+    { name = "albumentationsx", extras = ["headless"] },
     { name = "datasets" },
     { name = "lightning", specifier = ">=2.4.0" },
     { name = "mlflow", specifier = ">=3.10.1" },
@@ -739,15 +725,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/5d/5f8571bd5dedc80863191621ac4be001f3f3dd8315d2ec078705dab7dec1/durationpy-0.11.tar.gz", hash = "sha256:181898e1ae282e288f0a2291829656bf1b6b3aadf30a97993b85db4943642905", size = 3582, upload-time = "2026-08-26T13:56:00.991Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/c4/ebdf7837bc4ef6fd98cfb013c28855bb358467bf86c1af011bbc21e21df0/durationpy-0.11-py3-none-any.whl", hash = "sha256:a739fe2b8972c250ff72f8e2c488d18cf25f7b852f49ee76048775d5171df30c", size = 4133, upload-time = "2026-08-26T13:55:59.456Z" },
-]
-
-[[package]]
-name = "eval-type-backport"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1c/15/273a4baf8248d6d76220723c3caf039d283774b31a7c46ba686120145b76/eval_type_backport-0.4.0.tar.gz", hash = "sha256:8397d25e6524c2e67b9576bb0636be27dea2192017711220c534ec2de921e9b0", size = 10260, upload-time = "2026-06-02T13:22:06.059Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/a7/bb99bf5e6f78736ddb53480f2c3ff3702ffe2196a7c5e1661c03081d398e/eval_type_backport-0.4.0-py3-none-any.whl", hash = "sha256:ad5e2a8db71b6696a56eafb938b0f5a337d3217f256b8e158b469422b4772b20", size = 6432, upload-time = "2026-06-02T13:22:04.827Z" },
 ]
 
 [[package]]
