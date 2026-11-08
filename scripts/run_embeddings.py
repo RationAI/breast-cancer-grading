@@ -33,7 +33,7 @@ if __name__ == "__main__":
         job_name="brc-grading-embeddings-virchow2",
         image="cerit.io/rationai/base:2.0.6",
         cpu=12,
-        memory="32Gi",
+        memory="64Gi",
         gpu="A40",
         public=False,
         script=[
