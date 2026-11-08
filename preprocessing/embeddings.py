@@ -91,10 +91,13 @@ def embeddings_are_complete(embeddings_path: Path, expected_rows: int) -> bool:
     config_name="preprocessing",
     version_base=None,
 )
-@autolog
+@autolog(log_stream=False)  # Keep slide progress visible in Kubernetes logs.
 def main(config: DictConfig, logger: MLFlowLogger) -> None:
     dest = Path(config.output_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if str(config.precision) not in {"32", "bf16-mixed"}:
+        raise ValueError("precision must be '32' or 'bf16-mixed'")
+    mixed_precision = device.type == "cuda" and str(config.precision) == "bf16-mixed"
     tile_encoder: Virchow2 = hydra.utils.instantiate(config.tile_encoder)
     tile_encoder = tile_encoder.to(device)
 
@@ -130,6 +133,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
                 batch_size=config.dataloader.batch_size,
                 num_workers=config.dataloader.num_workers,
                 persistent_workers=config.dataloader.persistent_workers,
+                pin_memory=device.type == "cuda",
             )
 
             slide_tiles_embeddings = torch.zeros(
@@ -139,13 +143,19 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
             slide_tiles_y = torch.zeros((len(tile_dataset),), dtype=torch.int32)
 
             for i, (x, metadata) in enumerate(dataloader):
-                x = x.to(device)
-                embeddings = cast("torch.Tensor", tile_encoder(x))
+                x = x.to(device, non_blocking=True)
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=torch.bfloat16,
+                    enabled=mixed_precision,
+                ):
+                    embeddings = cast("torch.Tensor", tile_encoder(x))
 
                 start = i * config.dataloader.batch_size
                 end = start + embeddings.size(0)
 
-                slide_tiles_embeddings[start:end] = embeddings.to("cpu")
+                # Keep the output schema float32 in both precision modes.
+                slide_tiles_embeddings[start:end] = embeddings.float().cpu()
                 slide_tiles_x[start:end] = metadata["x"].to("cpu")
                 slide_tiles_y[start:end] = metadata["y"].to("cpu")
 

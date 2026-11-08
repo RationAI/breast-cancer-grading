@@ -1,9 +1,10 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 from datasets import Dataset
 
-from ml.data.datasets.tiles import SlideDataset
+from ml.data.datasets.tiles import OpenSlideTilesDataset, SlideDataset
 
 
 slides = Dataset.from_dict(
@@ -32,3 +33,24 @@ with patch(
     assert metadata["slide_id"] == "2020_00001-01-T"
 
 print("Tile coordinate compatibility test passed")
+
+with patch("ml.data.datasets.tiles.OpenSlide") as open_slide:
+    image = np.zeros((224, 224, 3), dtype=np.uint8)
+    open_slide.return_value.read_tile.return_value = image
+    reader = OpenSlideTilesDataset(
+        slide_path="slide.mrxs",
+        level=0,
+        tile_extent_x=224,
+        tile_extent_y=224,
+        tiles=tiles_for_images,
+    )
+    assert reader._slide is None
+    assert reader[0] is image
+    assert reader[0] is image
+    open_slide.assert_called_once_with(Path("slide.mrxs"))
+    assert open_slide.return_value.read_tile.call_count == 2
+    reader.close()
+    assert reader._slide is None
+    open_slide.return_value.close.assert_called_once()
+
+print("Slide-handle reuse and cleanup test passed")

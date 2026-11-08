@@ -32,8 +32,8 @@ if __name__ == "__main__":
     submit_with_hf_token(
         job_name="brc-grading-embeddings-virchow2",
         image="cerit.io/rationai/base:2.0.6",
-        cpu=24,
-        memory="64Gi",
+        cpu=12,
+        memory="32Gi",
         gpu="A40",
         public=False,
         script=[
@@ -41,6 +41,7 @@ if __name__ == "__main__":
             "cd workdir",
             "uv sync --frozen",
             "export HF_HOME=/mnt/projects/breast_cancer/brc_grading/huggingface_cache",
+            "export PYTHONUNBUFFERED=1",
             "uv run -m preprocessing.embeddings +experiment=preprocessing/embeddings/virchow2",
         ],
         storage=[

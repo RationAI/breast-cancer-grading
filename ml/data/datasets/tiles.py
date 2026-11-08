@@ -1,13 +1,41 @@
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
 from albumentations.core.composition import TransformType
 from albumentations.pytorch import ToTensorV2
 from datasets import Dataset as HFDataset
-from rationai.mlkit.data.datasets import MetaTiledSlides, OpenSlideTilesDataset
+from numpy.typing import NDArray
+from rationai.mlkit.data.datasets import MetaTiledSlides
+from rationai.mlkit.data.datasets import OpenSlideTilesDataset as BaseTilesDataset
+from ratiopath.openslide import OpenSlide
 from torch.utils.data import Dataset
 
 from ml.typing import TileMetadata, TilesPredictSample
+
+
+class OpenSlideTilesDataset(BaseTilesDataset):
+    """Reuse one WSI handle instead of reopening the slide for every tile."""
+
+    _slide: OpenSlide | None = None
+
+    def __getitem__(self, idx: int) -> NDArray[np.uint8]:
+        tile = self.tiles[idx]
+        level = self._get_from_tile(tile, self.level)
+        extent_x = self._get_from_tile(tile, self.tile_extent_x)
+        extent_y = self._get_from_tile(tile, self.tile_extent_y)
+        # Initialized lazily after DataLoader workers fork; one handle per worker.
+        if self._slide is None:
+            self._slide = OpenSlide(self.slide_path)
+        return self._slide.read_tile(tile["x"], tile["y"], extent_x, extent_y, level)
+
+    def close(self) -> None:
+        if self._slide is not None:
+            self._slide.close()
+            self._slide = None
+
+    def __del__(self) -> None:
+        self.close()
 
 
 class TileDataset(Dataset[TilesPredictSample]):

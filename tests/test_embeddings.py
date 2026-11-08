@@ -70,6 +70,7 @@ with TemporaryDirectory() as directory:
         dataset=SimpleNamespace(path="unused", exclude=excluded),
         output_dir=directory,
         tile_encoder=MagicMock(),
+        precision="32",
     )
     tiles = [StubTiles(name) for name in [*excluded, "good-slide"]]
     stdout = io.StringIO()
