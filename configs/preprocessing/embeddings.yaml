@@ -1,5 +1,8 @@
 # @package _global_
 
+defaults:
+  - /preprocessing/tile_encoder: virchow2
+
 output_dir: ${project_path}/embeddings/${dataset.name}
 
 dataloader:
