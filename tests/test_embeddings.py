@@ -1,5 +1,5 @@
 import io
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from inspect import unwrap
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -71,6 +71,9 @@ with TemporaryDirectory() as directory:
         output_dir=directory,
         tile_encoder=MagicMock(),
         precision="32",
+        dataloader=SimpleNamespace(
+            batch_size=1024, num_workers=4, persistent_workers=False
+        ),
     )
     tiles = [StubTiles(name) for name in [*excluded, "good-slide"]]
     stdout = io.StringIO()
@@ -84,6 +87,7 @@ with TemporaryDirectory() as directory:
         patch("preprocessing.embeddings.DataLoader", FailingDataLoader),
         patch("preprocessing.embeddings.hydra.utils.instantiate"),
         redirect_stdout(stdout),
+        redirect_stderr(io.StringIO()),
     ):
         logger = MagicMock()
         try:
@@ -93,6 +97,50 @@ with TemporaryDirectory() as directory:
             assert "good-slide" in str(error)
 
     assert stdout.getvalue().count("incomplete QC masks") == len(excluded)
+    assert "simulated decode error" in stdout.getvalue()
     logger.log_artifacts.assert_not_called()
 
-print("Embedding exclusion and failure-propagation tests passed")
+    save_embeddings(
+        torch.zeros((2, 3)),
+        torch.tensor([10, 20]),
+        torch.tensor([30, 40]),
+        Path(directory) / "good-slide.parquet",
+    )
+    progress = io.StringIO()
+    with (
+        patch(
+            "preprocessing.embeddings.SlideDataset",
+            return_value=SimpleNamespace(generate_datasets=lambda: tiles),
+        ),
+        patch("preprocessing.embeddings.DataLoader") as dataloader,
+        patch("preprocessing.embeddings.hydra.utils.instantiate"),
+        patch("preprocessing.embeddings.log_provenance"),
+        redirect_stdout(stdout),
+        redirect_stderr(progress),
+    ):
+        unwrap(main)(config, MagicMock())
+        dataloader.assert_not_called()
+
+    assert "1/1" in progress.getvalue()
+
+    bad_config = SimpleNamespace(
+        dataset=SimpleNamespace(path="unused", exclude=["unknown-slide"]),
+        output_dir=directory,
+        tile_encoder=MagicMock(),
+        precision="32",
+    )
+    with (
+        patch(
+            "preprocessing.embeddings.SlideDataset",
+            return_value=SimpleNamespace(generate_datasets=lambda: tiles),
+        ),
+        patch("preprocessing.embeddings.hydra.utils.instantiate") as instantiate,
+    ):
+        try:
+            unwrap(main)(bad_config, MagicMock())
+            raise AssertionError("Expected an unknown exclusion to fail the run")
+        except ValueError as error:
+            assert "unknown-slide" in str(error)
+        instantiate.assert_not_called()
+
+print("Embedding exclusion, resume-progress, and failure-propagation tests passed")

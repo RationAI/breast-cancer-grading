@@ -98,8 +98,6 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     if str(config.precision) not in {"32", "bf16-mixed"}:
         raise ValueError("precision must be '32' or 'bf16-mixed'")
     mixed_precision = device.type == "cuda" and str(config.precision) == "bf16-mixed"
-    tile_encoder: Virchow2 = hydra.utils.instantiate(config.tile_encoder)
-    tile_encoder = tile_encoder.to(device)
 
     dataset = SlideDataset(
         uris=[config.dataset.path],
@@ -109,66 +107,88 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     )
 
     excluded_slides = set(config.dataset.exclude)
+    all_tile_datasets = list(dataset.generate_datasets())
+    missing_exclusions = excluded_slides - {
+        tile_dataset.slide_path.stem for tile_dataset in all_tile_datasets
+    }
+    if missing_exclusions:
+        raise ValueError(f"Excluded slides not found: {sorted(missing_exclusions)}")
+    for slide_name in sorted(excluded_slides):
+        print(f"Skipping {slide_name}: incomplete QC masks")
+    tile_datasets = [
+        tile_dataset
+        for tile_dataset in all_tile_datasets
+        if tile_dataset.slide_path.stem not in excluded_slides
+    ]
+    # Materializing the slide metadata lets resumed files contribute to the
+    # counter without distorting tqdm's rate estimate.
+    completed_slides = sum(
+        embeddings_are_complete(
+            (dest / tile_dataset.slide_path.stem).with_suffix(".parquet"),
+            len(tile_dataset),
+        )
+        for tile_dataset in tile_datasets
+    )
     failed_slides = []
 
-    # Process each slide's tiles separately so embeddings can be saved per-slide
-    embedding_count = len(dataset.slides) - len(excluded_slides)
-    for tile_dataset in tqdm(
-        dataset.generate_datasets(), total=embedding_count, desc="Slides"
-    ):
-        slide_name = tile_dataset.slide_path.stem
-        if slide_name in excluded_slides:
-            print(f"Skipping {slide_name}: incomplete QC masks")
-            continue
+    # Process each slide's tiles separately so embeddings can be saved per-slide.
+    print(f"Slides: {completed_slides}/{len(tile_datasets)} already embedded")
+    tile_encoder: Virchow2 = hydra.utils.instantiate(config.tile_encoder)
+    tile_encoder = tile_encoder.to(device)
+    with tqdm(
+        total=len(tile_datasets), initial=completed_slides, desc="Slides"
+    ) as progress:
+        for tile_dataset in tile_datasets:
+            slide_name = tile_dataset.slide_path.stem
+            embeddings_path = (dest / slide_name).with_suffix(".parquet")
 
-        embeddings_path = (dest / slide_name).with_suffix(".parquet")
+            if embeddings_are_complete(embeddings_path, len(tile_dataset)):
+                print(f"Embeddings for slide {slide_name} already exist, skipping...")
+                continue
+            try:
+                dataloader = DataLoader(
+                    tile_dataset,
+                    batch_size=config.dataloader.batch_size,
+                    num_workers=config.dataloader.num_workers,
+                    persistent_workers=config.dataloader.persistent_workers,
+                    pin_memory=device.type == "cuda",
+                )
 
-        if embeddings_are_complete(embeddings_path, len(tile_dataset)):
-            print(f"Embeddings for slide {slide_name} already exist, skipping...")
-            continue
+                slide_tiles_embeddings = torch.zeros(
+                    (len(tile_dataset), tile_encoder.embed_dim), dtype=torch.float32
+                )
+                slide_tiles_x = torch.zeros((len(tile_dataset),), dtype=torch.int32)
+                slide_tiles_y = torch.zeros((len(tile_dataset),), dtype=torch.int32)
 
-        try:
-            dataloader = DataLoader(
-                tile_dataset,
-                batch_size=config.dataloader.batch_size,
-                num_workers=config.dataloader.num_workers,
-                persistent_workers=config.dataloader.persistent_workers,
-                pin_memory=device.type == "cuda",
-            )
+                for i, (x, metadata) in enumerate(dataloader):
+                    x = x.to(device, non_blocking=True)
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=torch.bfloat16,
+                        enabled=mixed_precision,
+                    ):
+                        embeddings = cast("torch.Tensor", tile_encoder(x))
 
-            slide_tiles_embeddings = torch.zeros(
-                (len(tile_dataset), tile_encoder.embed_dim), dtype=torch.float32
-            )
-            slide_tiles_x = torch.zeros((len(tile_dataset),), dtype=torch.int32)
-            slide_tiles_y = torch.zeros((len(tile_dataset),), dtype=torch.int32)
+                    start = i * config.dataloader.batch_size
+                    end = start + embeddings.size(0)
 
-            for i, (x, metadata) in enumerate(dataloader):
-                x = x.to(device, non_blocking=True)
-                with torch.autocast(
-                    device_type=device.type,
-                    dtype=torch.bfloat16,
-                    enabled=mixed_precision,
-                ):
-                    embeddings = cast("torch.Tensor", tile_encoder(x))
+                    # Keep the output schema float32 in both precision modes.
+                    slide_tiles_embeddings[start:end] = embeddings.float().cpu()
+                    slide_tiles_x[start:end] = metadata["x"].to("cpu")
+                    slide_tiles_y[start:end] = metadata["y"].to("cpu")
 
-                start = i * config.dataloader.batch_size
-                end = start + embeddings.size(0)
+                save_embeddings(
+                    slide_tiles_embeddings,
+                    slide_tiles_x,
+                    slide_tiles_y,
+                    embeddings_path,
+                )
 
-                # Keep the output schema float32 in both precision modes.
-                slide_tiles_embeddings[start:end] = embeddings.float().cpu()
-                slide_tiles_x[start:end] = metadata["x"].to("cpu")
-                slide_tiles_y[start:end] = metadata["y"].to("cpu")
-
-            save_embeddings(
-                slide_tiles_embeddings,
-                slide_tiles_x,
-                slide_tiles_y,
-                embeddings_path,
-            )
-
-        except Exception as e:
-            failed_slides.append(slide_name)
-            print(f"Error processing slide {slide_name}: {e}")
+            except Exception as e:
+                failed_slides.append(slide_name)
+                print(f"Error processing slide {slide_name}: {e}")
+            finally:
+                progress.update(1)
 
     if failed_slides:
         raise RuntimeError(f"Embedding failed for slides: {failed_slides}")

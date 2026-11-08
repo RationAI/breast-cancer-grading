@@ -111,7 +111,7 @@ class SlideDataset(MetaTiledSlides[TilesPredictSample]):
         self.transforms = transforms
         super().__init__(paths=paths, uris=uris, slides_and_tiles=slides_and_tiles)
 
-    def generate_datasets(self) -> Iterable[Dataset[TilesPredictSample]]:
+    def generate_datasets(self) -> Iterable[TileDataset]:
         # Rename tile_x/tile_y to x/y if needed
         if "tile_x" in self.tiles.column_names:
             self.tiles = self.tiles.rename_columns({"tile_x": "x", "tile_y": "y"})
