@@ -76,7 +76,9 @@ with TemporaryDirectory() as directory:
     with (
         patch(
             "preprocessing.embeddings.SlideDataset",
-            return_value=SimpleNamespace(generate_datasets=lambda: tiles),
+            return_value=SimpleNamespace(
+                slides=range(len(tiles)), generate_datasets=lambda: tiles
+            ),
         ),
         patch("preprocessing.embeddings.DataLoader", FailingDataLoader),
         patch("preprocessing.embeddings.hydra.utils.instantiate"),

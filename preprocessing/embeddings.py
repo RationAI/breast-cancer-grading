@@ -109,7 +109,10 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     failed_slides = []
 
     # Process each slide's tiles separately so embeddings can be saved per-slide
-    for tile_dataset in tqdm(dataset.generate_datasets(), desc="Slides"):
+    embedding_count = len(dataset.slides) - len(excluded_slides)
+    for tile_dataset in tqdm(
+        dataset.generate_datasets(), total=embedding_count, desc="Slides"
+    ):
         slide_name = tile_dataset.slide_path.stem
         if slide_name in excluded_slides:
             print(f"Skipping {slide_name}: incomplete QC masks")
