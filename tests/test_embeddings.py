@@ -106,7 +106,6 @@ with TemporaryDirectory() as directory:
         torch.tensor([30, 40]),
         Path(directory) / "good-slide.parquet",
     )
-    progress = io.StringIO()
     with (
         patch(
             "preprocessing.embeddings.SlideDataset",
@@ -116,12 +115,11 @@ with TemporaryDirectory() as directory:
         patch("preprocessing.embeddings.hydra.utils.instantiate"),
         patch("preprocessing.embeddings.log_provenance"),
         redirect_stdout(stdout),
-        redirect_stderr(progress),
     ):
         unwrap(main)(config, MagicMock())
         dataloader.assert_not_called()
 
-    assert "1/1" in progress.getvalue()
+    assert "1/1" in stdout.getvalue()
 
     bad_config = SimpleNamespace(
         dataset=SimpleNamespace(path="unused", exclude=["unknown-slide"]),

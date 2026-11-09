@@ -1,3 +1,5 @@
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -13,7 +15,6 @@ from rationai.mlkit.lightning.loggers import MLFlowLogger
 from rationai.provenance import log_provenance
 from timm.layers.mlp import SwiGLUPacked
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from ml.data.datasets import SlideDataset
 
@@ -120,8 +121,8 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
         for tile_dataset in all_tile_datasets
         if tile_dataset.slide_path.stem not in excluded_slides
     ]
-    # Materializing the slide metadata lets resumed files contribute to the
-    # counter without distorting tqdm's rate estimate.
+    # Completed slides count toward progress; the rate estimate below only
+    # counts slides embedded by this run.
     completed_slides = sum(
         embeddings_are_complete(
             (dest / tile_dataset.slide_path.stem).with_suffix(".parquet"),
@@ -135,60 +136,69 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     print(f"Slides: {completed_slides}/{len(tile_datasets)} already embedded")
     tile_encoder: Virchow2 = hydra.utils.instantiate(config.tile_encoder)
     tile_encoder = tile_encoder.to(device)
-    with tqdm(
-        total=len(tile_datasets), initial=completed_slides, desc="Slides"
-    ) as progress:
-        for tile_dataset in tile_datasets:
-            slide_name = tile_dataset.slide_path.stem
-            embeddings_path = (dest / slide_name).with_suffix(".parquet")
+    done_slides = completed_slides
+    run_started = time.monotonic()
+    # Process each slide's tiles separately so embeddings can be saved per-slide.
+    for tile_dataset in tile_datasets:
+        slide_name = tile_dataset.slide_path.stem
+        embeddings_path = (dest / slide_name).with_suffix(".parquet")
 
-            if embeddings_are_complete(embeddings_path, len(tile_dataset)):
-                print(f"Embeddings for slide {slide_name} already exist, skipping...")
-                continue
-            try:
-                dataloader = DataLoader(
-                    tile_dataset,
-                    batch_size=config.dataloader.batch_size,
-                    num_workers=config.dataloader.num_workers,
-                    persistent_workers=config.dataloader.persistent_workers,
-                    pin_memory=device.type == "cuda",
+        if embeddings_are_complete(embeddings_path, len(tile_dataset)):
+            continue
+        try:
+            dataloader = DataLoader(
+                tile_dataset,
+                batch_size=config.dataloader.batch_size,
+                num_workers=config.dataloader.num_workers,
+                persistent_workers=config.dataloader.persistent_workers,
+                pin_memory=device.type == "cuda",
+            )
+
+            slide_tiles_embeddings = torch.zeros(
+                (len(tile_dataset), tile_encoder.embed_dim), dtype=torch.float32
+            )
+            slide_tiles_x = torch.zeros((len(tile_dataset),), dtype=torch.int32)
+            slide_tiles_y = torch.zeros((len(tile_dataset),), dtype=torch.int32)
+
+            for i, (x, metadata) in enumerate(dataloader):
+                x = x.to(device, non_blocking=True)
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=torch.bfloat16,
+                    enabled=mixed_precision,
+                ):
+                    embeddings = cast("torch.Tensor", tile_encoder(x))
+
+                start = i * config.dataloader.batch_size
+                end = start + embeddings.size(0)
+
+                # Keep the output schema float32 in both precision modes.
+                slide_tiles_embeddings[start:end] = embeddings.float().cpu()
+                slide_tiles_x[start:end] = metadata["x"].to("cpu")
+                slide_tiles_y[start:end] = metadata["y"].to("cpu")
+
+            save_embeddings(
+                slide_tiles_embeddings,
+                slide_tiles_x,
+                slide_tiles_y,
+                embeddings_path,
+            )
+
+        except Exception as e:
+            failed_slides.append(slide_name)
+            print(f"Error processing slide {slide_name}: {e}")
+        finally:
+            done_slides += 1
+            progress = f"{done_slides}/{len(tile_datasets)} slides done"
+            if done_slides - completed_slides > 1:  # a rate from one slide is noise
+                rate = (done_slides - completed_slides) / (
+                    (time.monotonic() - run_started) / 3600
                 )
-
-                slide_tiles_embeddings = torch.zeros(
-                    (len(tile_dataset), tile_encoder.embed_dim), dtype=torch.float32
+                eta = datetime.now(UTC) + timedelta(
+                    hours=(len(tile_datasets) - done_slides) / rate
                 )
-                slide_tiles_x = torch.zeros((len(tile_dataset),), dtype=torch.int32)
-                slide_tiles_y = torch.zeros((len(tile_dataset),), dtype=torch.int32)
-
-                for i, (x, metadata) in enumerate(dataloader):
-                    x = x.to(device, non_blocking=True)
-                    with torch.autocast(
-                        device_type=device.type,
-                        dtype=torch.bfloat16,
-                        enabled=mixed_precision,
-                    ):
-                        embeddings = cast("torch.Tensor", tile_encoder(x))
-
-                    start = i * config.dataloader.batch_size
-                    end = start + embeddings.size(0)
-
-                    # Keep the output schema float32 in both precision modes.
-                    slide_tiles_embeddings[start:end] = embeddings.float().cpu()
-                    slide_tiles_x[start:end] = metadata["x"].to("cpu")
-                    slide_tiles_y[start:end] = metadata["y"].to("cpu")
-
-                save_embeddings(
-                    slide_tiles_embeddings,
-                    slide_tiles_x,
-                    slide_tiles_y,
-                    embeddings_path,
-                )
-
-            except Exception as e:
-                failed_slides.append(slide_name)
-                print(f"Error processing slide {slide_name}: {e}")
-            finally:
-                progress.update(1)
+                progress += f", {rate:.1f} slides/h, ETA {eta:%Y-%m-%d %H:%M} UTC"
+            print(progress, flush=True)
 
     if failed_slides:
         raise RuntimeError(f"Embedding failed for slides: {failed_slides}")
