@@ -34,8 +34,8 @@ for line, tag in zip(lines, ("att-s123", "att-s456", "mean-s123"), strict=True):
     assert f"[{tag}]" in line, "pod log must stay separable per variant"
     assert f"variant={tag.replace('-', '_')}" in line, "ASCII-only Hydra hyperparam"
     assert "resume.ckpt" in line and "$resume" in line, "packed runs must resume too"
-    assert 'echo "exit $?"' in line, (
-        "pod exits 0 on wait, so per-variant status is logged"
+    assert 'echo "$code" >> /tmp/train_rc' in line, (
+        "pod exits 0 after its sleep+wait tail, so training status must be recorded"
     )
 
 assert "seed=123 datamodule.num_workers=2" in lines[0]
@@ -51,6 +51,7 @@ assert all("metadata.run_name" not in line for line in lines), (
 single = run_train.train_command("", "seed=1")
 assert f"checkpoints_dir={run_train.BASE_CKPT_DIR} " in single
 assert "variant=baseline" in single
+assert "/tmp/train_rc" in single, "a solo pod must report its exit code too"
 
 try:
     run_train.packed_plan("   ")
@@ -69,10 +70,24 @@ JOINED = ";".join(
         "export PYTHONUNBUFFERED=1",
         *lines,
         "sleep 300; nvidia-smi --format=csv,noheader",
-        "wait",
+        "wait; [ -s /tmp/train_rc ] || { echo FATAL: no training exit code recorded; exit 1; }",
+        "awk '{s+=$1} END{exit s>0}' /tmp/train_rc || { echo FATAL: training failed; exit 1; }",
     ]
 )
 CHECK = subprocess.run(["bash", "-n"], input=JOINED, text=True, check=False)
 assert CHECK.returncode == 0, f"pod script does not parse:\n{JOINED}"
+
+# The status check itself, run against recorded codes.
+AWK = "awk '{s+=$1} END{exit s>0}'"
+for codes, want in (("0\n0\n", 0), ("0\n1\n", 1)):
+    got = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"printf '{codes}' > /tmp/train_rc.test; {AWK} /tmp/train_rc.test",
+        ],
+        check=False,
+    ).returncode
+    assert got == want, f"status check must exit {want} for codes {codes!r}"
 
 print("run_train plan-packing test passed")

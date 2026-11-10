@@ -70,9 +70,13 @@ def train_command(variant: str, overrides: str = "") -> str:
     before Hydra's grammar sees a value, so an em dash or bracket in a run name kills
     config parsing. Variant identity therefore goes in as an ASCII ``variant`` tag.
 
-    Deliberately the venv's own python rather than ``uv run``: three variants share one
-    pod, and going through the synced venv directly skips uv's project resolution and
+    Deliberately the venv's own python rather than ``uv run``: several variants can share
+    one pod, and going through the synced venv directly skips uv's project resolution and
     lock on the critical path (uv is still what builds the venv, one line earlier).
+
+    The exit code goes into ``/tmp/train_rc`` because the pod's script continues after
+    training (the ``sleep`` + ``wait`` tail exists to sample the GPU), so without it a
+    pod whose training died immediately still reported ``Succeeded`` -- four did, today.
     """
     ckpt = f"{BASE_CKPT_DIR}-{variant}" if variant else BASE_CKPT_DIR
     return (
@@ -80,7 +84,7 @@ def train_command(variant: str, overrides: str = "") -> str:
         'if [ -f "$f" ]; then resume="checkpoint=$f"; echo "resuming from $f"; fi; '
         ".venv/bin/python -m ml.train +experiment=ml/mil_attention "
         f"checkpoints_dir={ckpt} +metadata.hyperparams.variant={variant_tag(variant)} "
-        f"{overrides} $resume"
+        f'{overrides} $resume; code=$?; echo "$code" >> /tmp/train_rc; echo "training exit $code"'
     )
 
 
@@ -88,16 +92,15 @@ def packed_plan(plan: str) -> list[str]:
     """Turn ``tag:overrides;tag:overrides`` into backgrounded, log-prefixed lines.
 
     ``sed -u`` prefixes every line with the tag so the variants stay separable in
-    ``kubectl logs``; the trailing ``echo`` reports the training exit code, which the
-    pod's own status would otherwise hide. ``true`` closes each line because kube-jobs
-    joins the script with ``;`` and a line ending in ``&`` would become ``&;``.
+    ``kubectl logs``. ``true`` closes each line because kube-jobs joins the script with
+    ``;`` and a line ending in ``&`` would become ``&;``. Exit codes land in
+    ``/tmp/train_rc`` (see ``train_command``) for the script's final check.
     """
     lines = []
     for spec in filter(None, (s.strip() for s in plan.split(";"))):
         tag, _, overrides = spec.partition(":")
         lines.append(
-            f'( {train_command(tag, overrides)}; echo "exit $?" ) 2>&1 '
-            f'| sed -u "s|^|[{tag}] |" & true'
+            f'( {train_command(tag, overrides)} ) 2>&1 | sed -u "s|^|[{tag}] |" & true'
         )
     if not lines:
         raise ValueError(f"Empty TRAIN_PLAN: {plan!r}")
@@ -119,7 +122,11 @@ def main() -> None:
         image="cerit.io/rationai/base:2.0.6",
         cpu=int(os.getenv("TRAIN_CPU", "12")),
         memory=os.getenv("TRAIN_MEMORY", "48Gi"),
-        gpu="A40",
+        # A40 or an MIG slice of one (``mig-1g.10gb``, ``mig-2g.20gb`` -- what the other
+        # RationAI jobs ask for). A run touches ~10 GB of the card, so a slice is honest
+        # capacity-wise and easier to place than a whole card; the cost is fewer SMs, so
+        # epochs take longer.
+        gpu=os.getenv("TRAIN_GPU", "A40"),
         public=False,
         script=[
             # GIT_TERMINAL_PROMPT=0 so a node without GitHub egress fails at once instead
@@ -139,9 +146,12 @@ def main() -> None:
                 "export PYTHONUNBUFFERED=1 EMB_CACHE_GB="
                 + os.getenv("TRAIN_EMB_CACHE_GB", "18")
             ),
+            "rm -f /tmp/train_rc",
             *training,
             "sleep 300; nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader",
-            "wait",
+            # Green-but-did-nothing pods cost an hour each; make the job status honest.
+            "wait; [ -s /tmp/train_rc ] || { echo FATAL: no training exit code recorded; exit 1; }",
+            "awk '{s+=$1} END{exit s>0}' /tmp/train_rc || { echo FATAL: training failed; exit 1; }",
         ],
         storage=[storage.secure.PROJECTS],
     )

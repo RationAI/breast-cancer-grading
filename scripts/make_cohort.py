@@ -47,13 +47,27 @@ MORPHOLOGY_8500 = "8500"
 # BRC-A-20: rare/unsuitable slides excluded entirely before dataset creation.
 # Case-level entries drop the whole record; slide-level entries drop one slide.
 EXCLUDED_CASES = {
-    "2020_02716", "2020_04882", "2020_00857", "2020_01125", "2023_02823",
-    "2022_09552", "2024_00115", "2020_00781", "2020_02500",
+    "2020_02716",
+    "2020_04882",
+    "2020_00857",
+    "2020_01125",
+    "2023_02823",
+    "2022_09552",
+    "2024_00115",
+    "2020_00781",
+    "2020_02500",
 }
 EXCLUDED_SLIDES = {
-    "2020_00172-03-N", "2021_06248-10-T2", "2022_05492-1-N", "2022_09069-1-N",
-    "2021_08684-01-N", "2021_06115-02-N", "2022_07918-2-N", "2023_02864-2-T",
-    "2023_02503-3-T", "2021_03825-02-T",
+    "2020_00172-03-N",
+    "2021_06248-10-T2",
+    "2022_05492-1-N",
+    "2022_09069-1-N",
+    "2021_08684-01-N",
+    "2021_06115-02-N",
+    "2022_07918-2-N",
+    "2023_02864-2-T",
+    "2023_02503-3-T",
+    "2021_03825-02-T",
 }
 
 # Slide-name suffixes. Tumour slides end in ``-T`` / ``-T<n>`` and carry the
@@ -75,15 +89,20 @@ VALID_GRADES = {1, 2, 3}  # 0 is assigned to N slides; 9 is filtered out.
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--records", required=True, help="Path to the records CSV.")
-    p.add_argument("--tree", required=True, help="Root of the WSI tree (e.g. /mnt/bioptic_tree).")
+    p.add_argument(
+        "--tree", required=True, help="Root of the WSI tree (e.g. /mnt/bioptic_tree)."
+    )
     p.add_argument("--out", required=True, help="Output directory for the two CSVs.")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for the split.")
     p.add_argument(
-        "--ext", default=".mrxs",
+        "--ext",
+        default=".mrxs",
         help="Slide file extension present on disk (default .mrxs).",
     )
     p.add_argument(
-        "--require-embeddings", default=None, metavar="DIR",
+        "--require-embeddings",
+        default=None,
+        metavar="DIR",
         help="Drop slides with no <slide_id>.parquet in DIR (slides excluded from "
         "embedding, e.g. for missing QC masks, cannot be trained on).",
     )
@@ -99,8 +118,12 @@ def read_records(path: Path) -> dict[str, int]:
     """
     cases: dict[str, int] = {}
     skips = {
-        "no_record": 0, "excluded_case": 0, "morphology": 0,
-        "neoadjuvant": 0, "bad_grade": 0, "grade_9": 0,
+        "no_record": 0,
+        "excluded_case": 0,
+        "morphology": 0,
+        "neoadjuvant": 0,
+        "bad_grade": 0,
+        "grade_9": 0,
     }
     with path.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh, delimiter=";")
@@ -138,7 +161,10 @@ def read_records(path: Path) -> dict[str, int]:
         print(f"  columns found: {fields}", file=sys.stderr)
         print(f"  skips: {skips}", file=sys.stderr)
         if RECORD_COL not in fields:
-            print(f"  ERROR: column {RECORD_COL!r} not found — check the header.", file=sys.stderr)
+            print(
+                f"  ERROR: column {RECORD_COL!r} not found — check the header.",
+                file=sys.stderr,
+            )
     return cases
 
 
@@ -205,15 +231,23 @@ def main() -> None:
                     "case": record,
                     "grade": slide_grade,
                     "slide_id": name,
-                    "path": str(slide),  # full path with .mrxs (register_dataset verifies existence)
+                    "path": str(
+                        slide
+                    ),  # full path with .mrxs (register_dataset verifies existence)
                 }
             )
 
     if missing:
-        print(f"WARNING: {len(missing)} cases have no slides on disk, e.g. {missing[:5]}", file=sys.stderr)
+        print(
+            f"WARNING: {len(missing)} cases have no slides on disk, e.g. {missing[:5]}",
+            file=sys.stderr,
+        )
     if skipped:
         top = sorted(skipped.items(), key=lambda kv: -kv[1])
-        print(f"Skipped {sum(skipped.values())} non-T/N slides; suffix breakdown (top 15):", file=sys.stderr)
+        print(
+            f"Skipped {sum(skipped.values())} non-T/N slides; suffix breakdown (top 15):",
+            file=sys.stderr,
+        )
         for tail, count in top[:15]:
             print(f"  {tail}: {count}", file=sys.stderr)
 
@@ -279,7 +313,9 @@ def main() -> None:
         table[s["grade"]][case_split[s["case"]]] += 1
     for grade in sorted(table):
         row = table[grade]
-        print(f"  grade {grade}: " + "  ".join(f"{k}={row[k]}" for k in SPLIT_FRACTIONS))
+        print(
+            f"  grade {grade}: " + "  ".join(f"{k}={row[k]}" for k in SPLIT_FRACTIONS)
+        )
 
 
 if __name__ == "__main__":

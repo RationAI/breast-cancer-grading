@@ -1,4 +1,5 @@
 """Check QC mask files for OpenSlide/TiffFile readability on the cluster."""
+
 from collections import Counter
 from pathlib import Path
 
@@ -6,7 +7,9 @@ import tifffile
 from openslide import OpenSlide
 
 
-BASE = Path("/mnt/data/work/home/jovyan/k8s/rationai/namespaces/dp-quality-control/shared-volumes/qc-mask-storage")
+BASE = Path(
+    "/mnt/data/work/home/jovyan/k8s/rationai/namespaces/dp-quality-control/shared-volumes/qc-mask-storage"
+)
 
 MASKS = {
     "blur": BASE / "Piqe/blur_score_per_pixel",
@@ -23,9 +26,9 @@ for name, mask_dir in MASKS.items():
         continue
 
     tiff_files = sorted(mask_dir.glob("*.tiff"))
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"{name}: {len(tiff_files)} .tiff files in {mask_dir.name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     for path in tiff_files:
         # Check tifffile
@@ -69,9 +72,9 @@ for name, mask_dir in MASKS.items():
             print(f"    ... and {len(failures[name]) - 5} more")
 
 # Summary
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print("SUMMARY")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 any_ok = False
 for name in MASKS:
     total = stats[name].get("tifffile_ok", 0) + stats[name].get("openslide_fail", 0)
@@ -81,7 +84,11 @@ for name in MASKS:
         any_ok = True
     print(f"  {name}: {os_ok} OpenSlide-readable, {os_fail} OpenSlide-unreadable")
     if stats[name]["is_ome"] > 0:
-        print(f"    ({stats[name]['is_ome']} are OME-TIFF, would work with .ome.tiff extension)")
+        print(
+            f"    ({stats[name]['is_ome']} are OME-TIFF, would work with .ome.tiff extension)"
+        )
 
 if not any_ok:
-    print("\n  None are OpenSlide-readable. Fix: read QC masks with TiffFile, not OpenSlide.")
+    print(
+        "\n  None are OpenSlide-readable. Fix: read QC masks with TiffFile, not OpenSlide."
+    )

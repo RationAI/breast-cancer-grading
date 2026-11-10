@@ -33,7 +33,9 @@ def download_tissue_masks(artifact_uri: str, local_dir: Path) -> None:
     # Download to parent so the artifact's directory name becomes local_dir
     local_dir.parent.mkdir(exist_ok=True, parents=True)
     print(f"Downloading tissue masks from {artifact_uri}...")
-    mlflow.artifacts.download_artifacts(artifact_uri=artifact_uri, dst_path=str(local_dir.parent))
+    mlflow.artifacts.download_artifacts(
+        artifact_uri=artifact_uri, dst_path=str(local_dir.parent)
+    )
     print(f"Downloaded {len(list(local_dir.iterdir()))} tissue masks.")
 
 

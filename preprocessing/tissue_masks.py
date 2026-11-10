@@ -41,9 +41,7 @@ def main(config: DictConfig, logger: MLFlowLogger) -> None:
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Skip already-processed slides
-    unprocessed = [
-        s for s in slides if not (output_dir / (s.stem + ".tiff")).exists()
-    ]
+    unprocessed = [s for s in slides if not (output_dir / (s.stem + ".tiff")).exists()]
     if not unprocessed:
         print("All tissue masks already exist. Nothing to do.")
         return
