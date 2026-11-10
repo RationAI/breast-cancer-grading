@@ -1,5 +1,6 @@
 """Packed multi-variant job script generation (scripts/run_train.py)."""
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,7 +18,9 @@ PLAN = (
 lines = run_train.packed_plan(PLAN)
 
 assert len(lines) == 3, "one backgrounded line per variant"
-assert all(line.endswith("&") for line in lines)
+assert all(line.endswith("& true") for line in lines), (
+    "kube-jobs joins with ';': no bare & line end"
+)
 
 expected_dirs = {
     f"{run_train.BASE_CKPT_DIR}-{tag}" for tag in ("att-s123", "att-s456", "mean-s123")
@@ -51,5 +54,21 @@ except ValueError:
     pass
 else:
     raise AssertionError("an empty plan must fail before a job is submitted")
+
+# kube-jobs concatenates the whole script with ';' into one bash -c, which is what
+# turned a trailing '&' into a syntax error and killed the pod before it trained.
+JOINED = ";".join(
+    [
+        "git clone https://github.com/RationAI/breast-cancer-grading.git workdir",
+        "cd workdir",
+        "uv sync --frozen",
+        "export PYTHONUNBUFFERED=1",
+        *lines,
+        "sleep 300; nvidia-smi --format=csv,noheader",
+        "wait",
+    ]
+)
+CHECK = subprocess.run(["bash", "-n"], input=JOINED, text=True, check=False)
+assert CHECK.returncode == 0, f"pod script does not parse:\n{JOINED}"
 
 print("run_train plan-packing test passed")

@@ -83,14 +83,15 @@ def packed_plan(plan: str) -> list[str]:
 
     ``sed -u`` prefixes every line with the tag so the variants stay separable in
     ``kubectl logs``; the trailing ``echo`` reports the training exit code, which the
-    pod's own status would otherwise hide.
+    pod's own status would otherwise hide. ``true`` closes each line because kube-jobs
+    joins the script with ``;`` and a line ending in ``&`` would become ``&;``.
     """
     lines = []
     for spec in filter(None, (s.strip() for s in plan.split(";"))):
         tag, _, overrides = spec.partition(":")
         lines.append(
             f'( {train_command(tag, overrides)}; echo "exit $?" ) 2>&1 '
-            f'| sed -u "s|^|[{tag}] |" &'
+            f'| sed -u "s|^|[{tag}] |" & true'
         )
     if not lines:
         raise ValueError(f"Empty TRAIN_PLAN: {plan!r}")
