@@ -74,27 +74,40 @@ def dump_dir(checkpoint_root: str, variant: str) -> str:
 def load_variant(
     checkpoint_root: str, variant: str
 ) -> tuple[str, pd.DataFrame, pd.DataFrame] | None:
-    """Return (epoch, valid frame, test frame) for the dumped best epoch, or None.
+    """Return (epoch, valid frame, test frame) for the dumped predictions, or None.
 
-    Only the checkpoint Lightning tests at the end is evaluated on test, so the single
-    ``test_epoch<N>.csv`` names the epoch whose ``valid_epoch<N>.csv`` to fit on.
+    The valid and test dumps are **not** numbered the same: Lightning bumps
+    ``current_epoch`` before the final test, so a 19-epoch run leaves ``test_epoch18.csv``
+    next to ``valid_epoch0..17.csv``, and pairing by equal number never matches (the first
+    ensemble job printed "no dumps" for variants the reporter had just listed). So the test
+    frame comes from the single ``test_epoch<N>.csv``, and the valid frame we fit the
+    decision rule on is whichever dumped epoch has the best validation balanced accuracy.
     """
     directory = dump_dir(checkpoint_root, variant)
-    epochs = [
+    tests = [
         int(p.rsplit("epoch", 1)[1].split(".")[0])
         for p in glob.glob(os.path.join(directory, "test_epoch*.csv"))
     ]
-    if not epochs:
+    valids = [
+        int(p.rsplit("epoch", 1)[1].split(".")[0])
+        for p in glob.glob(os.path.join(directory, "valid_epoch*.csv"))
+    ]
+    if not tests or not valids:
         return None
-    epoch = max(epochs)
-    valid = os.path.join(directory, f"valid_epoch{epoch}.csv")
-    if not os.path.exists(valid):
+    best, best_score = None, -1.0
+    for epoch in valids:
+        frame = pd.read_csv(os.path.join(directory, f"valid_epoch{epoch}.csv"))
+        logits = frame[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()
+        score = metrics_from_logits(frame["label"].to_numpy(), logits)[
+            "balanced_accuracy"
+        ]
+        if score > best_score:
+            best, best_score = frame, score
+    if best is None:
         return None
-    return (
-        str(epoch),
-        pd.read_csv(valid),
-        pd.read_csv(os.path.join(directory, f"test_epoch{epoch}.csv")),
-    )
+    test = pd.read_csv(os.path.join(directory, f"test_epoch{max(tests)}.csv"))
+    # Labelled for the report line: the valid epoch we fit on need not be the tested one.
+    return (f"test{max(tests)}/valid{best_score:.4f}", best, test)
 
 
 def align(frames: list[pd.DataFrame]) -> list[pd.DataFrame]:

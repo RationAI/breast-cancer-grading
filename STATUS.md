@@ -223,16 +223,60 @@ pair of arms, not a bug.
 
 ```bash
 cd ~/Documents/rationAI/breast-cancer-grading
-export MLFLOW_TRACKING_URI=https://mlflow-s3.rationai.cloud.trusted.e-infra.cz
-MLFLOW_DISABLE_AGENT_HINT=1 PYTHONPATH=. .venv/bin/python /tmp/full_table.py   # all runs, recalls included
-# then re-ensemble everything that now has dumps (CPU pod, ~3 min):
-REPORT_JOB_NAME=brc-grading-ensemble2 REPORT_SCRIPT=ensemble_variants.py \
-REPORT_VARIANTS=full_s456,full_ord_s456,full_ord_s789,t2048_ord_s456,t2048_w_s456,t2048_ord_s123 \
+MLFLOW_URL=https://mlflow-s3.rationai.cloud.trusted.e-infra.cz MLFLOW_DISABLE_AGENT_HINT=1 \
+  PYTHONPATH=. .venv/bin/python scripts/all_runs_table.py    # every finished run, recalls included
+# then re-ensemble everything that now has dumps (CPU pod, ~3 min; delete the old job first):
+REPORT_JOB_NAME=brc-grading-ensemble3 REPORT_SCRIPT=ensemble_variants.py \
+REPORT_VARIANTS=full_s456,full_ord_s456,full_ord_s789,tiles2048_s456,t2048_ord_s456,t2048_w_s456,t2048_ord_s123 \
   uv run --no-sync python scripts/run_report.py
 ```
 
-The first ensemble job (`brc-grading-ensemble`) finished at 23:4x UTC and **its output has not been
-read yet** — `kubectl logs -n rationai-jobs-ns <pod>` while the pod is still there.
+### The ensemble script found "no dumps" — my off-by-one, now fixed
+
+`brc-grading-ensemble` ran to completion and reported **no dumps for all four variants**, while
+`report_variants.py` listed test CSVs for the same variants minutes earlier. I settled it by
+`kubectl exec` into a live training pod with the share mounted (no job spent): the share holds
+`test_epoch18.csv` next to `valid_epoch0..17.csv` — Lightning bumps `current_epoch` before the final
+test — and `load_variant()` demanded a *valid* dump with the **same number** as the test one, so it
+returned `None` for every variant. Fixed to take the test frame from the single `test_epoch<N>.csv`
+and pick the validation frame by **best validation balanced accuracy** (which is also the honest way
+to choose what λ is fitted on). `tests/test_ensemble_pairing.py` reproduces the exact numbering
+mismatch. So: **no ensemble or prior-correction number exists yet** — that is the first thing the
+rerun above produces.
+
+## What we do with the results (bar fixed before we look)
+
+Every arm is judged **paired against its own seed's baseline**, on balanced accuracy plus the four
+recalls and macro-F1, with AUROC and kappa checked for regression. Adopt only if **both seeds agree
+and the gain is ≥3 points** and c0's recall is not what moved; below that the finding is written as
+"no effect", not as "promising, let's re-run" — the same config spans 6 points across three seeds, so
+a single favourable run is a hypothesis. λ and any threshold are fitted on validation only; the test
+split is touched once per configuration. Whatever is adopted goes into `configs/` as the new default
+recipe, not into a note, and the retired arms stay listed here so nobody pays for them twice.
+
+| result | what we do next | cost |
+|---|---|---|
+| prior rule and/or ensemble ≥3 points | becomes **post-processing, not a config**: fit λ on val, emit per-slide grades + a screening score, apply it retroactively to every run with dumps, and report AUROC + corrected recalls as the headline. It also means the model ranks better than its argmax is used → ranking losses / calibration get another shot | CPU minutes |
+| class weights win at both seeds | third seed + an oversampling arm to prove the mechanism, then change the default loss and the roadmap becomes "more class-1 slides", not "better head" | 2–3 A40 jobs |
+| selecting on `valid/accuracy` wins | config-only, becomes the default monitor; the best recipe gets a fresh 3-seed run under it and older numbers are marked not comparable | 3 A40 jobs |
+| weight decay / dropout / 4096 tiles win | one more point on that curve + second seed, then it is the recipe | 2–4 A40 jobs |
+| **nothing clears the bar** (the likely outcome) | the head is not the limit → stop tuning heads, fund **k-fold** (resolution) and a **features probe** instead | see below |
+
+## Agreed as the next candidates, not queued
+
+1. **Learning-curve probe — train on 50 % vs 100 % of the training slides, everything else equal.**
+   The only test in the plan that addresses the big question: flat ⇒ frozen Virchow2 tiles at one
+   magnification are the ceiling and the next money goes to features; climbing ⇒ data volume is the
+   lever. Needs a slide-subset knob (`datamodule.train` has no such parameter today), ~30 lines.
+2. **k-fold over the 1735 slides.** Test is 266 slides, so the ruler reads ±2.6 points while the seed
+   spread is 6 — half of what we queue exists only to find out whether effects are measurable. Five
+   folds turn a ±2.6 ruler into ~±1 and make one job per arm decisive. ~1 day of split code.
+3. **Random-length sub-sample (uniform 1024–4096 tiles per bag per epoch) to clear the 2048 win.**
+   Tile count alone scores 0.579 accuracy / 0.509 QWK on test (earlier probe, not re-verified this
+   session), i.e. tumour area is genuine signal; a *fixed* 2048 cap truncates the three tumour grades
+   to ~20 % of their tiles and leaves c0's small bags alone, so part of the 2048 advantage could be
+   bag-length handling rather than bag augmentation. One job. Not the confound people assume: a
+   fixed cap *compresses* the size distribution, it does not encode the label.
 
 ## Plumbing facts worth keeping (each one cost a failed job)
 
@@ -289,14 +333,17 @@ read yet** — `kubectl logs -n rationai-jobs-ns <pod>` while the pod is still t
 - NAS throughput measured 565 MB/s aggregate — not the bottleneck; per-file parquet decode is (that is
   what the bag cache exists for, `e416621`).
 - **Tests here are import-time assert scripts, not pytest functions**: run each file directly
-  (`.venv/bin/python tests/test_x.py`). `pytest tests` collects **nothing** (no `__init__.py`,
-  non-recursive default) — `consider_namespace_packages = true` in `pyproject.toml` fixes that, and
-  `pytest` is now a declared dev dependency (`pytest -q tests` → 55 passed).
+  (`PYTHONPATH=. .venv/bin/python tests/test_x.py`) — all eight pass that way as of 2026-11-11.
+  `pytest -q tests` collects **zero items** even with `pythonpath`/`consider_namespace_packages` set
+  in `pyproject.toml` (tried, reverted), because the files contain no `test_*` functions. Without a
+  `pythonpath` it fails louder: `ModuleNotFoundError: ml / preprocessing`. Left as it is on purpose;
+  add the ini options the day someone writes real test functions.
 
 ## Not known
 
-- Whether an ensemble of seeds beats the best single run here — the dumps exist for four variants,
-  the ensemble/McNemar script does not.
+- Whether an ensemble of seeds beats the best single run here — the dumps exist, the script exists
+  (`scripts/ensemble_variants.py`, self-test passing) and has now been fixed; it has still produced
+  **no number**, because the first run died on the epoch pairing above.
 - Whether 2048 tiles is the right budget (only 2048 vs "all" have been compared; 1024 and 4096 untested),
   or whether attention weights attend to anything morphologically meaningful (no attention-map
   inspection, no slide-level visualisation).
