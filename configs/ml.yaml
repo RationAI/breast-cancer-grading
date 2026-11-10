@@ -19,8 +19,9 @@ feature_dim: ???  # tile-feature width = encoder.out_dim; set per experiment
 # Provenance — paste the values the registration printed (see README,
 # "Provenance"). Left null, training runs unverified (best effort).
 dataset:
-  # register_embeddings.py's printed run_id — the per-slide embedding parquets,
-  # not the source WSI registration. scripts/run_train.py copies that run's
-  # manifest.csv into ./data so the ProvenanceCallback verifies against it.
-  run_id: null
-  split_uris: null   # e.g. {train: 'mlflow-artifacts:/<exp_id>/<run_id>/artifacts/train.csv', test: '...'}
+  # Run that produced and archived the embeddings (mlflow exp 82, all 1735
+  # per-slide parquets as artifacts) — the provenance pointer for training.
+  # Byte-level verification stays off: it only runs when a manifest.csv is found
+  # next to the training cwd, and the embeddings live in MLflow instead.
+  run_id: 96532a9ff29241e4b65d57dbc379e944
+  split_uris: null   # splits come from the `split` column of labels.csv (BRC-A-20)

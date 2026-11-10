@@ -25,3 +25,4 @@ callbacks:
     fail_fast: true  # abort training if the disk no longer matches the registration
     dataset_run_id: ${dataset.run_id}
     split_uris: ${dataset.split_uris}  # referenced, not recomputed
+    test_size: 0  # splits live in the `split` column of labels.csv; default 0.2 would silently re-split
