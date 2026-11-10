@@ -148,8 +148,8 @@ def report_mlflow(
         print(
             f"{variant:16s} mlflow ep={metrics.get('epoch', float('nan')):5.0f} "
             f"kappa={metrics.get('test/kappa', float('nan')):.4f} "
-            f"bal_acc={metrics.get('test/balanced_accuracy', float('nan')):.4f} "
-            f"f1={metrics.get('test/macro_f1', float('nan')):.4f} "
+            f"bal_acc={metrics.get('test/accuracy', float('nan')):.4f} "
+            f"f1={metrics.get('test/f1', float('nan')):.4f} "
             f"auroc={metrics.get('test/auroc', float('nan')):.4f} "
             f"loss={metrics.get('test/loss', float('nan')):.4f}"
         )

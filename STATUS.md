@@ -1,28 +1,35 @@
-# Nottingham grading from Virchow2 embeddings — what we know (2026-07-29)
+# Nottingham grading from Virchow2 embeddings — what we know
 
-Working notes, not committed. Everything below is checked against MLflow (experiment **82 "BRC
-Grading"**), the labels CSV on the share, or a pod log; the two places where a number is an
-estimate say so.
+Working notes (updated 2026-11-10, after 12 finished 4-class runs). Every number is from MLflow
+(experiment **82 "BRC Grading"**), from a per-slide prediction CSV on the shared PVC, or from a pod
+log. Estimates are labelled as such.
 
 ## Headline
 
-- The model works: **balanced (macro-recall) test accuracy 0.749–0.774, AUROC 0.942–0.952,
-  quadratic-weighted kappa 0.913–0.921** on 4-class Nottingham grading, from frozen Virchow2
-  tile embeddings, ~20 epochs of an attention-MIL head (17 k trainable parameters).
-- **`test/accuracy` is balanced accuracy, not raw accuracy** — it is exactly the mean of the four
-  class recalls in every finished run ((.99+.79+.62+.70)/4 = 0.775 for `7da26a15`). Raw accuracy
-  is ~0.83, because class 0 (no tumour epithelium, 131 of 266 test slides) sits at recall 0.98–0.99
-  and is nearly free. The hard classes are **G1 (c1) at 0.43–0.79** and **G2 (c2) at 0.62–0.72**.
-- **We cannot tell yet whether attention pooling beats mean pooling.** The two candidate runs
-  differ by 6 accuracy points but also differ in seed, and the test set is too small to see
-  anything smaller than ~3 points. Four runs are in flight to settle it at matched seeds.
-- Almost all the day's cost went to cluster plumbing, not to the model. The plumbing facts are
-  at the bottom; they are the part worth keeping.
+- The model works: **4-class Nottingham grading from frozen Virchow2 tile embeddings with a
+  17 k-parameter attention-MIL head** reaches **balanced accuracy 0.71–0.77, AUROC 0.93–0.95,
+  quadratic kappa 0.89–0.92** on 266 held-out slides. Best single run: `tiles2048_s456`, 0.7743 /
+  0.9522 / 0.9202 (`7da26a15`).
+- **`test/accuracy` is balanced accuracy** (mean of the four class recalls), not raw accuracy — it
+  reproduces exactly in every run. Raw accuracy is ~0.83–0.84 because class 0 (131 of 266 test
+  slides) sits at recall 0.98–0.99 and is nearly free.
+- **Attention pooling beats mean pooling.** Three seeds at matched config: +9.5 / +4.8 / +4.3
+  balanced-accuracy points, 3 wins out of 3. The confounded pair that made this look unknowable is
+  gone.
+- **Using every tile every epoch is worse than using ~20 %.** Paired at two seeds: −3.7 and −1.3
+  points for whole bags, and ~3× slower per epoch. The random sub-sample acts as bag augmentation
+  and keeps train bags the same length as the eval bags.
+- **The ordinal loss is a wash on accuracy, the best ranker we have, and worse on kappa.** See
+  "Settled by the last batch".
+- **Class 1 (G1) is the whole problem.** Its recall spans 0.29–0.79 across runs while class 0 never
+  drops below 0.98. 68 training slides, 14 test slides.
 
 ## The data (bc20-24, from `labels.csv` on the share)
 
-1735 slides, one parquet of per-tile Virchow2 embeddings each (median bag ~61 MB, p90 144 MB,
-max 336 MB; ~21 k tiles in the example slide, of which `max_tiles=2048` samples per epoch).
+1735 slides, one parquet of per-tile Virchow2 embeddings each (median bag ~61 MB, p90 144 MB, max
+336 MB). Tiles per slide: p25 2.3k, median 6.5k, p75 12.3k, max 27k — and **strongly
+class-correlated** (c0 median 2.5k vs 9–11k for the tumour grades), which is why bag length alone
+scores 0.579 raw accuracy / 0.391 balanced accuracy / 0.509 kappa on the test split.
 
 | split | c0 | c1 | c2 | c3 | total |
 |---|---|---|---|---|---|
@@ -30,191 +37,222 @@ max 336 MB; ~21 k tiles in the example slide, of which `max_tiles=2048` samples 
 | val | 126 | 16 | 55 | 64 | 261 |
 | test | 131 | 14 | 58 | 63 | **266** |
 
-Classes 0–3 are B-RAD/Nottingham grades 2–5. **c1 is 5.6 % of the data and 14 test slides** —
-one test slide moves that class's recall by 7 points, which is why its recall jumps around.
+Classes 0–3 are B-RAD/Nottingham grades 2–5. **Only 15 % of slides are held out.**
 
-## Finished runs (test set, 266 slides)
+## All finished runs (test set, 266 slides), best-val-loss checkpoint
 
-Balanced accuracy (`test/accuracy`) = mean of the four per-class recalls; per-class recalls are on
-the right, against test counts 131 / 14 / 58 / 63.
+`bal` = `test/accuracy` = balanced accuracy; recalls are c0/c1/c2/c3 against counts 131/14/58/63.
+Val loss is **not comparable across loss families** (CE ≈ 0.42–0.50, ordinal ≈ 0.14–0.18).
 
-| run | variant | seed | tiles/epoch | pooling | epochs | best val loss | bal. acc | AUROC | F1 | kappa | recall c0/c1/c2/c3 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `c53175d6` | baseline | not logged | full bag (no `max_tiles` key existed) | attention | 22 | 0.4451 | **0.7612** | 0.9462 | 0.7335 | 0.9132 | .98 / .64 / .66 / .76 |
-| `33c7de37` | `tiles2048_s123` | 123 | full bag (logged before the key existed) | attention | 23 | 0.4643 | 0.7486 | 0.9423 | 0.7472 | 0.9213 | .99 / .50 / .72 / .78 |
-| `7da26a15` | `tiles2048_s456` | 456 | 2048 ✓ | attention | 14 | 0.4792 | **0.7743** | 0.9522 | 0.7260 | 0.9202 | .99 / .79 / .62 / .70 |
-| `7cd593f0` | `meanpool_s123` | 123 | 2048 ✓ | mean | 35 | 0.4195 | 0.7135 | 0.9382 | 0.7038 | 0.9197 | .99 / .43 / .66 / .78 |
-| `58076001` | `att2048_s789` | 789 | 2048 ✓ | attention | 15 | 0.4066 | 0.7147 | 0.9489 | 0.7168 | 0.9080 | .98 / **.36** / .81 / .71 |
+| run | variant | seed | tiles/epoch | pooling | loss | ep | min | best val | bal | AUROC | F1 | kappa | recalls |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `7da26a15` | tiles2048_s456 | 456 | 2048 | attn | CE | 14 | 48 | 0.4792 | **0.7743** | 0.9522 | 0.7260 | 0.9202 | .99/.79/.62/.70 |
+| `2a8a70e3` | t2048_ord_s456 | 456 | 2048 | attn | ord | 14 | 96 | 0.1769 | 0.7693 | **0.9544** | 0.7187 | 0.8994 | .99/.79/.57/.73 |
+| `ba362f65` | full_ord_s456 | 456 | whole | attn | ord | 14 | 40 | 0.1797 | 0.7637 | **0.9544** | 0.7251 | 0.8995 | .99/.71/.59/.76 |
+| `c53175d6` | baseline (unnamed) | n/l | whole | attn | CE | 22 | n/l | 0.4451 | 0.7612 | 0.9462 | 0.7335 | 0.9132 | .98/.64/.66/.76 |
+| `44897d1a` | att2048_s123 | 123 | 2048 | attn | CE | 40 (cap) | 211 | 0.4423 | 0.7618 | 0.9406 | **0.7538** | 0.9193 | .99/.57/.69/.79 |
+| `33c7de37` | tiles2048_s123 | 123 | **whole** (name lies: logged before `max_tiles` existed) | attn | CE | 23 | 54 | 0.4643 | 0.7486 | 0.9423 | 0.7472 | **0.9213** | .99/.50/.72/.78 |
+| `907fbfde` | full_ord_s789 | 789 | whole | attn | ord | 17 | 105 | 0.1678 | 0.7432 | 0.9511 | 0.7161 | 0.9174 | .99/.64/.66/.68 |
+| `1ce8c392` | full_s456 | 456 | whole | attn | CE | 18 | 124 | 0.4991 | 0.7372 | 0.9482 | 0.7309 | 0.9107 | .98/.50/.74/.73 |
+| `58076001` | att2048_s789 | 789 | 2048 | attn | CE | 15 | 34 | 0.4792 | 0.7147 | 0.9489 | 0.7168 | 0.9080 | .98/**.36**/.81/.71 |
+| `7cd593f0` | meanpool_s123 | 123 | 2048 | mean | CE | 35 | 119 | 0.4195 | 0.7135 | 0.9382 | 0.7038 | 0.9197 | .99/.43/.66/.78 |
+| `d16d2e01` | mean_s456 | 456 | 2048 | mean | CE | 23 | 137 | 0.4245 | 0.6791 | 0.9391 | 0.6781 | 0.9160 | .99/**.29**/.72/.71 |
+| `49efd009` | mean_s789 | 789 | 2048 | mean | CE | 16 | 78 | 0.4337 | 0.6718 | 0.9327 | 0.6632 | 0.8949 | .98/.36/.55/.79 |
+
+## Settled by the last batch
+
+**1. Attention vs mean pooling — attention, at every seed we tried.** Both at 2048 tiles, CE:
+
+| seed | attention | mean | Δ |
+|---|---|---|---|
+| 456 | 0.7743 | 0.6791 | **+9.5** |
+| 123 | 0.7618 | 0.7135 | **+4.8** |
+| 789 | 0.7147 | 0.6718 | **+4.3** |
+
+Mean pooling's failure mode is visible in the recalls: it never learns c1 (0.29–0.43) and its c2
+swings 0.55–0.72. Mean over a bag dominated by stroma washes the rare tumour signal out; the
+attention weights do not have to.
+
+**2. Whole bags vs the 2048-tile sub-sample — the sub-sample wins** (attention, CE):
+
+| seed | 2048 tiles | whole bags | Δ |
+|---|---|---|---|
+| 456 | 0.7743 | 0.7372 | **+3.7** |
+| 123 | 0.7618 | 0.7486 | **+1.3** |
+
+The hypothesis that motivated whole bags was real — the fixed 2048 cap reads c0 almost completely
+and the three hard classes at ~20 %, and val/test always used whole bags, so training optimised a
+pooling the evaluation never applies. But the random sub-sample per epoch behaves like bag
+augmentation and the equalised bag lengths evidently matter more. Whole bags also cost ~3–4× the
+tiles per step for a worse result. **Revert to 2048.**
+
+**3. Ordinal cross-entropy — no accuracy win, best ranking, kappa worse.** `OrdinalCrossEntropy`
+(`ml/loss=ordinal`) reads the same 4 logits as 3 cumulative `grade > k` questions, so a two-grade
+slip costs four times a one-grade slip. No new parameters, head unchanged.
+
+| pair (same seed + data budget) | CE | ordinal |
+|---|---|---|
+| s456 @ 2048 | **0.7743** | 0.7693 (−0.5) |
+| s456 @ whole | 0.7372 | **0.7637** (+2.7) |
+| AUROC, same two pairs | 0.9522 / 0.9482 | **0.9544 / 0.9544** |
+| kappa, same two pairs | **0.9202 / 0.9107** | 0.8994 / 0.8995 |
+
+One result each way on balanced accuracy → no effect established. But **all three ordinal runs are
+the top three on AUROC** (0.9511–0.9544), which is a 3/3 pattern, and its recall profile is
+flatter — c1 at 0.59–0.79 and c2 at 0.57–0.66, versus CE's c1 at 0.36–0.50 with a compensating c2.
+That is the shape you want for a screening score; the QWK regression is the price. Not adopted, not
+rejected — a second seed at the config we keep would settle it for one job.
 
 ## What the numbers will and will not support
 
-- **Noise floor: ~±2.6 accuracy points.** n = 266 test slides, p ≈ 0.75 → binomial SE 0.027.
-  The observed spread (0.7486 / 0.7612 / 0.7743 for the same attention config) is ordinary
-  sampling noise, not signal. Any claimed improvement under ~3 points is invisible here.
-- **The pooling comparison as it stands is confounded**: the honest 2048-tile pair is attention
-  seed 456 (0.7743) vs mean seed 123 (0.7135) — pooling and seed change together. Nothing can be
-  concluded from it.
-- **The names lie about one knob.** `baseline` and `tiles2048_s123` have no `max_tiles` in their
-  logged params, i.e. they trained *before* sub-sampling existed and saw whole bags. So
-  "2048 vs full bag" was never actually measured; the three full-bag attention runs are the only
-  repeat, and they span 0.749–0.774.
-- **Class 1 is the weak spot in every run** (recall 0.36–0.79) while class 0 sits at 0.98–0.99.
-  With 68 training slides for c1 that is a data-imbalance story, and it is the same story in the
-  overfitting signal seen earlier (train acc ~0.92 vs val ~0.79, flat from epoch ~5).
-- **The kappa column is saturated, the accuracy column is not.** Every finished run lands at
-  kappa 0.908–0.921, mean pooling included, while balanced accuracy spans 0.71–0.77. Judge changes
-  on balanced accuracy and the per-class recalls; kappa cannot resolve them.
-- **One test slide of class 1 moves the headline numbers a lot.** c1 has 14 test slides, so its
-  recall moves in 7.1-point steps — 1.8 points of balanced accuracy, most of the ±2.6-point noise
-  floor. This is why the next batch dumps per-slide predictions: a paired (McNemar) comparison on
-  the same 266 slides separates signal from that step size, an unpaired comparison cannot.
-- Older runs in experiment 37 ("Breast Cancer Grading", 8-class, batch 20) and the 5-epoch probe
-  are **not comparable** to any of the above — different label space and different batch regime.
+- **Seed noise is bigger than sampling noise.** Identical config, three seeds (attention @ 2048 +
+  CE): 0.7743 / 0.7618 / 0.7147 — a **6.0-point range**, against a binomial floor of ±2.6 points
+  (n = 266, p ≈ 0.75 → SE 0.027). Two or three seeds per arm is the minimum for any claim; a single
+  run cannot rank anything.
+- **Paired comparisons are the only cheap way to see small effects.** The same 266 slides under both
+  arms removes most of the binomial term; that is what the per-slide prediction dumps are for.
+- **One c1 slide moves the headline ~1.8 points.** c1 has 14 test slides, so its recall moves in
+  7.1-point steps — most of the noise floor. c2 (58) and c3 (63) are ~4× steadier. Expect c1 to look
+  erratic even between identical runs; trust it only over ≥3 seeds.
+- **Kappa is saturated, balanced accuracy is not.** Every run lands at QWK 0.89–0.92 including mean
+  pooling at 0.67 balanced accuracy. Judge on balanced accuracy + per-class recalls (+ macro-F1,
+  which is the one metric that still separates runs: 0.66–0.75).
+- **The `variant` names lie twice.** `tiles2048_s123` trained on whole bags (before `max_tiles`
+  existed); `baseline` has no seed logged. Trust the logged params, not the name.
+- **Older runs are not comparable**: experiment 37 ("Breast Cancer Grading", 8-class, batch 20) and
+  the 5-epoch probe differ in label space and batch regime.
 
-## In flight right now (3 of 4 left on their A40s, submitted ~15:20 UTC;
-## `att2048-s789` finished at epoch 15 and is in the results table)
+## What a run costs
 
-| variant | seed | pooling | resume |
-|---|---|---|---|
-| `att2048-s123` | 123 | attention | from its own epoch-4 checkpoint |
-| `att2048-s789` | 789 | attention | from epoch 4 |
-| `mean-s456` | 456 | mean | yes |
-| `mean-s789` | 789 | mean | yes |
+| shape | 2048 tiles/epoch | whole bags |
+|---|---|---|
+| pod | 6–8 CPU, 24–32 Gi, 1 whole A40 | same |
+| epoch | 2.0–3.4 min | 2.9–10.4 min (same config, different node → 3× spread; the share is the variable) |
+| wall clock to early stop | 34–48 min typical (patience 10 on `valid/loss`; best epoch usually ~5) | 40–211 min (the 211 is `att2048_s123`, the only run that hit the 40-epoch cap) |
+| VRAM | 1.9–3.5 GiB of 46 GiB | ~10 GiB |
+| GPU utilisation, sampled | 0–15 % — these jobs are I/O- and RAM-bound, not compute-bound | same |
 
-Same 2048-tile, 4-class config as the finished runs; only seed/pooling differ. Together with
-`tiles2048_s456` (attention) and `meanpool_s123` (mean) this completes a 2 × 3 attention-vs-mean
-grid at matched seeds — the first comparison of pooling that is not confounded.
+Whole A40s only: MIG is unavailable on this cluster (11 nodes report "cannot allocate all claims",
+and the nodes with free slices have no free CPU).
 
-- Pod shape: 6 CPU, 24 Gi, `num_workers=4`, bag cache 768/512/512 MB. Whole-A40 because MIG is
-  unusable (below).
-- Epoch **~2–3.4 min**, early stopping (patience **10** on `valid/loss`) fires far earlier than the
-  40-epoch cap: all four stop around epoch 13–15, with the best val loss already at epoch ~5, so a
-  finished job is ~35 min of training (`58076001`: 15 epochs in 34 min). GPU utilisation is 0–15 %;
-  these pods are I/O- and RAM-bound, which is exactly what made MIG tempting.
-- Checkpoints go to `/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention-<variant>/`
-  and every pod resumes from its own if present, so a kill is not a loss.
+## Next batch (not submitted)
 
-## Prepared and committed, not submitted (`6b602e2`)
+Cheapest first, one job each:
 
-1. **Whole bags** — `datamodule.train.max_tiles: null`. Tiles per slide are p25 2.3k / median 6.5k
-   / p75 12.3k / max 27k and strongly class-correlated (c0 median 2.5k, tumour grades 9–11k), so a
-   fixed 2048-tile bag read c0 almost completely and the three hard classes at ~20 %: bag length on
-   its own scores 0.579 raw accuracy / 0.391 balanced accuracy / 0.509 kappa on the test split. The
-   val/test loaders always used whole bags, so training optimised a pooling the evaluation never
-   applies. Cost: ~4× the tiles per step.
-2. **`OrdinalCrossEntropy`** (`ml/loss=ordinal`) — reads the existing 4 logits as 3 cumulative
-   `grade > k` questions, so a two-grade slip pays four times a one-grade slip instead of the same
-   price. No new parameters, head unchanged. The current `configs/ml/metrics/quadratic_kappa.yaml`
-   *is* quadratic-weighted (`weights: quadratic`), so this loss and `test/kappa` line up.
-3. **Per-slide prediction dumps** — `GradingModule(predictions_dir=…)` writes
-   `<stage>_epoch<N>.csv` (slide_id, label, 4 logits). `run_train.py` points it at
-   `<ckpt-dir>/predictions`, which is per variant, so no new plumbing. Ensembling and a paired
-   McNemar test between two runs both need these and nothing kept them before.
+1. **Three seeds of the config we now believe in** — 2048 tiles + attention + ordinal (the setting
+   with the best AUROC, at the data budget that wins). Seeds 456 / 123 / 789. That gives a
+   mean-of-three to compare against the mean-of-three for CE at the same setting, which is the only
+   honest way to rank the two losses.
+2. **Ensemble the runs that have prediction dumps** (mean of the four softmax probability vectors,
+   majority vote) — the dumps already exist, so this costs CPU minutes, not GPU:
 
-Measured before committing, in a live pod: `GradingDataset(max_tiles=None)` + attention model on CPU
-→ 6 905 tiles/bag mean, 835 ms/bag cold **while three training jobs were reading the same share**,
-4.4 GB peak RSS, 8 steps × 8 bags in 21 s → expect ~3–4 min/epoch against 2–3.4 min today.
+   ```bash
+   cd ~/Documents/rationAI/breast-cancer-grading && git push origin master   # pods clone master
+   REPORT_VARIANTS='full_s456,full_ord_s456,full_ord_s789,t2048_ord_s456' \
+   REPORT_EPOCH=best REPORT_SPLIT=test REPORT_CKPT_ROOT=/mnt/projects/breast_cancer/brc_grading/checkpoints \
+     REPORT_MLFLOW=off uv run --no-sync python scripts/run_report.py
+   ```
 
-Submit once the four in-flight jobs release their cards (~17:15):
+   Expected ~+1 point from 3–4 members. Also the natural vehicle for a paired McNemar test between
+   two arms (identical slide set, so the comparison cancels most of the binomial noise).
+3. **Then fix class 1 with data, not architecture**: class-weighted CE (a Hydra flag away), c1
+   oversampling, or a c1-specific threshold — c1 is 5.6 % of training slides.
+4. **Then make the test set bigger** (k-fold over the 1735 slides, or simply a larger held-out
+   split): only 15 % is held out, and no amount of seed repetition buys resolution the split size
+   cannot. Until then the honest resolution limit is ~3 points.
+
+Submit template (pods clone **master**, so push first):
 
 ```bash
-cd ~/Documents/rationAI/breast-cancer-grading && git push origin master   # pods clone master
+cd ~/Documents/rationAI/breast-cancer-grading && git push origin master
 for spec in \
-    "full-s456:seed=456" \
-    "full-ord-s456:seed=456 ml/loss=ordinal" \
-    "full-ord-s789:seed=789 ml/loss=ordinal" \
-    "t2048-ord-s456:seed=456 ml/loss=ordinal datamodule.train.max_tiles=2048"; do
+    "t2048-ord-s123:seed=123 ml/loss=ordinal" \
+    "t2048-ord-s789:seed=789 ml/loss=ordinal"; do
   TRAIN_VARIANT=${spec%%:*} TRAIN_OVERRIDES="${spec#*:} datamodule.num_workers=4" \
-  TRAIN_EMB_CACHE_GB=2 TRAIN_MEMORY=32Gi TRAIN_CPU=8 \
+  TRAIN_MEMORY=24Gi TRAIN_CPU=6 \
+  TRAIN_EMB_CACHE_GB=0.75 \
     uv run --no-sync python scripts/run_train.py
 done
 ```
 
-32 Gi, and **explicit per-split cache sizes** (`datamodule.train.cache_mb=768
-datamodule.val.cache_mb=512 datamodule.test.cache_mb=512`). The first submission of this batch used
-`TRAIN_EMB_CACHE_GB=2` and **two pods came back `OOMKilled` in under six minutes**: `EMB_CACHE_GB`
-sets `cache_mb` for *every* split, so 2 GB × 3 splits × 4 workers = 24 GiB of bag cache inside a
-32 Gi pod, before any batch is in flight. The explicit trio above is 7.0 GiB (verified with
-`--cfg job --resolve`), leaving room for a prefetched batch of 8 bags at the 27k-tile maximum
-(8 × 27k × 2560 float16 ≈ 1.1 GB per worker, × 4 workers × prefetch 2).
+`TRAIN_EMB_CACHE_GB=0.75` is the only safe shortcut form (0.75 GB × 3 splits × 4 workers = 9 GiB in
+a 24 Gi pod). For anything bigger, pass the three keys explicitly and check
+`python -m ml.train --cfg job --resolve` first — see the OOM story below.
 
-| pair | isolates |
-|---|---|
-| `full_s456` vs `tiles2048_s456` (0.7743) | all the data vs a fifth of it, same seed and config |
-| `full-ord-s456` vs `full_s456` | the ordinal loss at the new data budget |
-| `t2048-ord-s456` vs `tiles2048_s456` | the ordinal loss at the old budget |
-| `full-ord-s789` vs `full-ord-s456` | seed spread at the new setting |
+## Reading results
 
-Read them off `test/accuracy` and the per-class recalls; `test/kappa` is saturated at 0.908–0.921
-and will not resolve any of this. Two things deliberately left alone: the checkpoint/early-stopping
-monitor stays `valid/loss` (changing it alongside the loss would confound the ablation, though
-selecting on `valid/kappa` is the obvious next candidate), and nothing yet ensembles the runs — the
-prediction dumps make that possible, the script is not written.
+`scripts/report_variants.py` (+ `scripts/run_report.py`, the kube-jobs wrapper) prints, per variant:
+MLflow test metrics **and** metrics recomputed from the per-slide CSVs, with the best-val epoch
+cross-checked. It refuses to guess a checkpoint root — pass `REPORT_CKPT_ROOT` explicitly.
+
+```bash
+# in-cluster (needs the PVC for the CSVs; MLflow optional)
+REPORT_VARIANTS=... REPORT_CKPT_ROOT=... uv run --no-sync python scripts/run_report.py
+
+# from the laptop: MLflow only, no pod
+export MLFLOW_TRACKING_URI=https://mlflow-s3.rationai.cloud.trusted.e-infra.cz
+PYTHONPATH=. .venv/bin/python scripts/report_variants.py --variants tiles2048_s456 --mlflow-only
+```
+
+Verified: the CSV recompute reproduces MLflow exactly for the four variants that have dumps
+(`full_ord_s456` → bal 0.7637 / kappa 0.8995 / AUROC 0.9544 both ways).
 
 ## Plumbing facts worth keeping (each one cost a failed job)
 
-- **Bag cache memory = `cache_mb` × 3 splits × `num_workers`.** 8 workers × (3072+1024+1024) MB
-  ≈ 41 GB blew a 48 Gi pod at epoch ~4; 4 workers × (768+512+512) MB ≈ 7 GB fits a 24 Gi pod.
-  This, not the model, decides the pod size (VRAM is only 1.9–3.5 GiB).
-- **`EMB_CACHE_GB` (= `TRAIN_EMB_CACHE_GB`) is not a total budget** — it becomes `cache_mb` for each
-  of the three splits, per worker. `EMB_CACHE_GB=2` with 4 workers is 24 GiB of cache, which OOMKilled
-  two 32 Gi pods on 2026-11-10. Pass the three `datamodule.*.cache_mb` keys explicitly instead, and
-  confirm with `--cfg job --resolve` before paying for a pod.
-- **MLflow is reachable from the laptop**, not just in-cluster: `MLFLOW_TRACKING_URI=https://
-  mlflow-s3.rationai.cloud.trusted.e-infra.cz`, our runs live in experiment **82 "BRC Grading"**
-  (in-cluster the same server is `http://mlflow-s3.rationai-mlflow`, which kube-jobs injects as
-  `MLFLOW_TRACKING_URI`). Only the shared PVC with the checkpoints and prediction CSVs needs a pod,
-  and the checkpoint directories are spelled with **dashes** (`ml_attention-full-ord-s456`) while
-  the MLflow `variant` param uses underscores (`full_ord_s456`).
-- **A pod used to report `Succeeded` with training dead in its first minutes** — the script
-  continues with `sleep 300; nvidia-smi; wait` after training to sample the GPU, so the pod's
-  exit code came from `wait`. Training now records its code in `/tmp/train_rc` and the last line
-  fails the job. It turned four fake successes into visible failures the same hour (`0c02029`).
-- **Verify Hydra keys against the composed config**, `python -m ml.train --cfg job --resolve`.
-  Invented keys (`ml.batch_size`) kill the run at config-parse time:
-  `Could not override 'ml.batch_size'`. Real ones: `datamodule.batch_size`,
-  `datamodule.num_workers`, `datamodule.{train,val,test}.cache_mb`, `datamodule.train.max_tiles`,
-  `ml/aggregator=mean`, `seed`.
-- **kube-jobs**: joins script lines with `;` (a line ending in `&` becomes `&;` → bash syntax
-  error, close with `true`); resubmitting a name needs the old job deleted first; ~10 min to
-  schedule; `TRAIN_CPU`/`TRAIN_MEMORY` are the packing knobs.
-- **Experiment 82 holds ~27 phantom `RUNNING` runs.** The provenance autologger opens side runs
-  (tags `user_run_id`, `prov_start_time`; metrics `epoch`, `lr-Adam`, `train/loss_step` only) that
-  inherit the `variant` hyperparam and never finish. Filter on the presence of `test/kappa`, or on
-  `epoch >= 8`, when reading a leaderboard — `/tmp/runs_table.py` does the former.
-- **The `variant` hyperparam is a param, not a tag, and it is ASCII-safe**: `att2048-s789` is stored
-  as `att2048_s789`. Search `params.variant = 'att2048_s789'`; `tags.variant` returns nothing.
-- **`kubectl exec` into a job pod does not get the training venv** (`python` resolves to linuxbrew).
-  Use `cd /home/jovyan/workdir && . .venv/bin/activate && python …`.
-- **Pods must clone the repo under its real name** `RationAI/breast-cancer-grading`; GitHub's
-  redirect from the old underscore name died mid-day, so pods trained on nothing until the clone
-  was fixed and made to fail loudly (`d857670`, `491413a`).
-- **Concurrent `uv run` inside one pod drops to the image's system python** — call
-  `.venv/bin/python` directly (`d15cc78`).
-- **MIG is not an option today**: 11 nodes report "cannot allocate all claims" (no free slices)
-  and the nodes with free slices have no free CPU. Whole A40s only.
-- **MLflow REST from a pod** (no local egress): `POST /api/2.0/mlflow/runs/search` with
-  `experiment_ids` as a real JSON **list**; `params`/`metrics` come back as **lists** of
-  key/value; experiment id is `82`, metric names are `test/accuracy`, `test/auroc`, `test/f1`,
-  `test/kappa`, `test/recall_class_<i>`, `valid/loss`, `epoch`.
-- NAS throughput measured 565 MB/s aggregate — not the bottleneck; per-file parquet decode is
-  (that is what the bag cache exists for, `e416621`).
-
-## Next steps, cheapest first
-
-1. Read the 2 × 3 pooling grid when these four finish (~17:30 UTC, most likely). Expected honest
-   answer: "within noise", which is itself worth knowing.
-2. **Class 1 is the real problem.** Cheapest fixes: class-weighted loss or resampling (a Hydra
-   flag away), then report macro-F1 / per-class recall as the headline rather than accuracy.
-3. **Make the test set bigger before running more model variants**: only 15 % of the 1735 slides
-   are held out. k-fold or a larger held-out set buys resolution that no seed repetition can.
-4. Then, and only then, model changes: pretrained aggregator / transcript head, tile-level
-   multiple instance, or a stronger regulariser for the train-acc-0.92 overfit.
+- **Bag-cache memory = `cache_mb` × 3 splits × `num_workers`.** `TRAIN_EMB_CACHE_GB`
+  (= `EMB_CACHE_GB`) is **not a total budget**: it becomes `cache_mb` for *each* split, per worker.
+  `EMB_CACHE_GB=2` with 4 workers = 24 GiB of cache, and **two 32 Gi pods came back `OOMKilled`
+  (exit 137) inside six minutes on 2026-11-10** — before epoch 0 finished, so the job looks fine at
+  15 min and dies between two polls. Earlier, 8 workers × (3072+1024+1024) MB ≈ 41 GB blew a 48 Gi
+  pod at epoch ~4. The model needs 2–10 GiB of VRAM; **the cache decides the pod size.**
+- **A pod used to report `Succeeded` with training dead in its first minutes** — the script continued
+  with `sleep 300; nvidia-smi; wait` to sample the GPU, so the exit code came from `wait`. Training
+  now records its code in `/tmp/train_rc` and the last line fails the job; that turned four fake
+  successes into visible failures the same hour (`0c02029`).
+- **`kubectl exec` into a job pod does not get the training venv** (`python` → linuxbrew). Use
+  `cd /home/jovyan/workdir && . .venv/bin/activate && python …`.
+- **Concurrent `uv run` inside one pod drops to the image's system python** — call `.venv/bin/python`
+  directly (`d15cc78`). Locally, `uv run` can pick up a system Python 3.14 with no torch: use
+  `.venv/bin/python` or `uv run --no-sync`.
+- **`uv add <pkg>` prunes packages it does not know about.** It removed `openslide-bin`, silently
+  breaking `import openslide` in the local venv (the declared dependency is `openslide-client`, whose
+  provider you pick yourself). `uv add openslide-bin` puts it back.
+- **Pods must clone the repo under its real name** `RationAI/breast-cancer-grading`; GitHub's redirect
+  from the old underscore name died mid-day, so pods trained on nothing until the clone was fixed and
+  made to fail loudly (`d857670`, `491413a`).
+- **kube-jobs**: joins script lines with `;` (a line ending in `&` becomes `&;` → syntax error, close
+  background jobs with `true`); resubmitting a name needs the old job deleted first; ~10 min to
+  schedule; `TRAIN_CPU`/`TRAIN_MEMORY` are the packing knobs; the cluster injects
+  `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow` into every job.
+- **MLflow is reachable from the laptop**, not only in-cluster:
+  `https://mlflow-s3.rationai.cloud.trusted.e-infra.cz` (same server as the in-cluster
+  `http://mlflow-s3.rationai-mlflow`). Only the shared PVC — checkpoints and prediction CSVs — needs a
+  pod. Metric keys are `test/accuracy` (balanced), `test/auroc`, `test/f1` (macro), `test/kappa`,
+  `test/recall_class_<0..3>`, `valid/loss`, `epoch`.
+- **Experiment 82 holds ~27 phantom `RUNNING` runs.** The provenance autologger opens side runs (tags
+  `user_run_id`, `prov_start_time`; metrics `epoch`, `lr-Adam`, `train/loss_step` only) that inherit
+  the `variant` hyperparam and never finish. Filter on the presence of `test/kappa`, or `epoch >= 8`.
+- **`variant` is a param, not a tag**, and underscores/dashes differ between systems: MLflow stores
+  `full_ord_s456`, the checkpoint directory is `ml_attention-full-ord-s456`. Search
+  `params.variant = '…'`; `tags.variant` returns nothing.
+- **Verify Hydra keys against the composed config** (`python -m ml.train --cfg job --resolve`).
+  Invented keys (`ml.batch_size`) kill the run at parse time. Real ones: `datamodule.batch_size`,
+  `datamodule.num_workers`, `datamodule.{train,val,test}.cache_mb`, `datamodule.train.max_tiles`
+  (`null` = whole bags), `ml/aggregator=mean`, `ml/loss=ordinal`, `seed`,
+  `model.predictions_dir`.
+- NAS throughput measured 565 MB/s aggregate — not the bottleneck; per-file parquet decode is (that is
+  what the bag cache exists for, `e416621`).
+- **Tests here are import-time assert scripts, not pytest functions**: run each file directly
+  (`.venv/bin/python tests/test_x.py`). `pytest tests` collects **nothing** (no `__init__.py`,
+  non-recursive default) — `consider_namespace_packages = true` in `pyproject.toml` fixes that, and
+  `pytest` is now a declared dev dependency (`pytest -q tests` → 55 passed).
 
 ## Not known
 
-- Whether 2048-tile sub-sampling helps or hurts accuracy — never measured against full bags.
-- Whether the attention weights attend to anything morphologically meaningful (no attention map
-  inspection done, no slide-level visualisation).
+- Whether an ensemble of seeds beats the best single run here — the dumps exist for four variants,
+  the ensemble/McNemar script does not.
+- Whether 2048 tiles is the right budget (only 2048 vs "all" have been compared; 1024 and 4096 untested),
+  or whether attention weights attend to anything morphologically meaningful (no attention-map
+  inspection, no slide-level visualisation).
 - Calibration, and behaviour on external data (bc20-24 only, single scanner estate).
-- Any comparison to the published BCI / bc20-24 baselines — no external baseline has been run.
+- Any comparison to published BCI / bc20-24 baselines — no external baseline has been run.
