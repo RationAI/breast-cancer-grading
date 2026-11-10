@@ -29,13 +29,15 @@ run is data-bound and small -- ~10 GB of the 48 GB on the card -- so packing thr
 them is what actually uses the GPU. Keep both budgets inside the pod:
 
 * VRAM: 3 x ~10-12 GB fits an A40, 4 does not;
-* RAM: ``num_workers`` is per variant, and each worker process holds its own
-  ``datamodule.*.cache_mb`` bag cache -- 3 variants x (2 workers + main) x 3 GB is
-  ~27 GiB of the 48 Gi requested;
-* CPU: ~3 per variant at ``num_workers=2``. Keep the default 12 unless the scheduler
-  refuses: dropping to 6 put the pack on a node without GitHub egress, so ``git clone``
-  failed (``could not read Username for 'https://github.com'``) and the pod trained
-  nothing. Prefer deleting a finished job over shrinking a request.
+* RAM: ask for what the variants really use, not for the whole node. Each variant's
+  workers hold their own ``datamodule.*.cache_mb`` bag cache (default 3072 MB, falling
+  back to ``EMB_CACHE_GB``), so a pack multiplies that by variants x (workers + 1);
+  ``TRAIN_EMB_CACHE_GB`` caps it at 5 GB per variant -- still far more than one epoch's
+  bags. Request 24 Gi: a 48 Gi request does not schedule on a GPU node that already
+  carries other jobs, which is how pack3 got OOM-killed with ``resource is out of
+  usage: memory`` before it trained anything.
+* CPU: ~3 per variant at ``num_workers=2``; keep the default 12, which is what the solo
+  runs scheduled with.
 
     TRAIN_VARIANT=pack3 TRAIN_PLAN="att-s123:seed=123 datamodule.num_workers=2;\
     att-s456:seed=456 datamodule.num_workers=2;\
@@ -132,7 +134,11 @@ def main() -> None:
             # green job status (git's credential failure looked like a success downstream).
             "[ -f pyproject.toml ] || { echo 'FATAL: clone failed, no pyproject.toml'; exit 1; }",
             "uv sync --frozen",
-            "export PYTHONUNBUFFERED=1",
+            (
+                # The bag cache budget is per process, so a pack has to divide it out.
+                "export PYTHONUNBUFFERED=1 EMB_CACHE_GB="
+                + os.getenv("TRAIN_EMB_CACHE_GB", "18")
+            ),
             *training,
             "sleep 300; nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader",
             "wait",
