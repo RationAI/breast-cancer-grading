@@ -1,4 +1,4 @@
-"""Submit the MIL grading training job.
+"""Submit the MIL grading training job(s).
 
 Data it reads (all on the PROJECTS mount, paths from ``configs/data/grading.yaml``):
 
@@ -9,26 +9,40 @@ Data it reads (all on the PROJECTS mount, paths from ``configs/data/grading.yaml
 * ``<project_path>/labels.csv`` — ``slide_id, grade, split``; must list exactly the
   embedded slides (``make_cohort.py --require-embeddings`` enforces that).
 
-Resumable: checkpoints go to ``<project_path>/checkpoints/ml_attention`` on the
-PVC, and resubmitting picks up ``resume.ckpt`` (saved unconditionally every epoch)
-automatically, so a preempted pod continues instead of restarting. To deliberately
-retrain from scratch, delete that directory.
+Resumable: each variant owns ``<project_path>/checkpoints/ml_attention-<variant>`` on
+the PVC and resubmitting picks up ``resume.ckpt`` (written unconditionally every
+epoch) automatically, so a preempted pod continues instead of restarting. To
+deliberately retrain from scratch, delete that variant's directory.
 
 kube-jobs names the job ``<job_name>-<user>``, so one resubmit per attempt:
-``kubectl delete job brc-grading-train-mil-attention-<user> -n rationai-jobs-ns``
-(the failed attempt keeps its record in MLflow, so nothing is lost).
+``kubectl delete job brc-grading-train-mil-attention-<variant>-<user>
+-n rationai-jobs-ns`` (the failed attempt keeps its record in MLflow).
 
-Variant runs, so several configs can train side by side without sharing a
-checkpoint directory (job name, checkpoint dir and MLflow run name all follow the
-variant)::
+One variant per run::
 
     TRAIN_VARIANT=tiles2048-s123 TRAIN_OVERRIDES="seed=123" python scripts/run_train.py
 
-Host memory: each dataloader worker keeps its own fp16 bag cache
-(``datamodule.train.cache_mb``, 3 GB) plus the bags it has in flight (median 61 MB,
-p90 144 MB, max 336 MB), so 8 workers sit near 25-30 GiB of the 48 Gi requested and
-epochs after the first do no NAS reads. Raise ``memory`` before ``num_workers`` or
-``cache_mb``.
+Several variants packed onto the one A40 the pod gets (``TRAIN_PLAN`` is
+``tag:overrides;tag:overrides``; ``TRAIN_VARIANT`` then only names the job, while the
+plan tags name the checkpoint dirs and the MLflow ``variant`` hyperparam). A training
+run is data-bound and small -- ~10 GB of the 48 GB on the card -- so packing three of
+them is what actually uses the GPU. Keep both budgets inside the pod:
+
+* VRAM: 3 x ~10-12 GB fits an A40, 4 does not;
+* RAM: ``num_workers`` is per variant, and each worker process holds its own
+  ``datamodule.*.cache_mb`` bag cache -- 3 variants x (2 workers + main) x 3 GB is
+  ~27 GiB of the 48 Gi requested;
+* CPU: ~3 per variant at ``num_workers=2``.
+
+    TRAIN_VARIANT=pack3 TRAIN_PLAN="att-s123:seed=123 datamodule.num_workers=2;\
+    att-s456:seed=456 datamodule.num_workers=2;\
+    mean-s123:seed=123 ml/aggregator=mean datamodule.num_workers=2" \
+    python scripts/run_train.py
+
+Packed runs interleave in the pod log, each line prefixed ``[tag]``; grep that to read
+one variant. Each prints ``exit <code>`` at the end, because the pod itself exits 0 as
+soon as ``wait`` returns -- check those lines rather than the job status. The run also
+samples ``nvidia-smi`` once at ~5 min so the packing is measured rather than assumed.
 """
 
 import os
@@ -36,37 +50,79 @@ import os
 from kube_jobs import storage, submit_job
 
 
-VARIANT = os.getenv("TRAIN_VARIANT", "")
-OVERRIDES = os.getenv("TRAIN_OVERRIDES", "")
-SUFFIX = f"-{VARIANT}" if VARIANT else ""
-CKPT_DIR = f"/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention{SUFFIX}"
-# Variant tag goes in as a Hydra override, so it must be plain ASCII without spaces
-# (the shell strips quotes before Hydra's grammar sees them).
-VARIANT_TAG = VARIANT.replace("-", "_").replace(".", "_") or "baseline"
+BASE_CKPT_DIR = "/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention"
 
 
-submit_job(
-    job_name=f"brc-grading-train-mil-attention{SUFFIX}",
-    image="cerit.io/rationai/base:2.0.6",
-    cpu=12,
-    memory="48Gi",
-    gpu="A40",
-    public=False,
-    script=[
-        "git clone https://github.com/RationAI/breast-cancer-grading.git workdir",
-        "cd workdir",
-        "uv sync --frozen",
-        "export PYTHONUNBUFFERED=1",
-        # Resume in place if a previous attempt left a checkpoint behind. ``resume``
-        # is written every epoch; ``last`` only on improvement (older attempts).
-        (
-            f'ck="{CKPT_DIR}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; '
-            'resume=""; if [ -f "$f" ]; then resume="checkpoint=$f"; echo "Resuming from $f"; fi'
-        ),
-        (
-            f"uv run -m ml.train +experiment=ml/mil_attention checkpoints_dir={CKPT_DIR} "
-            f"+metadata.hyperparams.variant={VARIANT_TAG} {OVERRIDES} $resume"
-        ),
-    ],
-    storage=[storage.secure.PROJECTS],
-)
+def variant_tag(variant: str) -> str:
+    """ASCII identifier for the ``variant`` hyperparam (see ``train_command``)."""
+    return variant.replace("-", "_").replace(".", "_") or "baseline"
+
+
+def train_command(variant: str, overrides: str = "") -> str:
+    """Resume in place if this variant's directory has a checkpoint, then train.
+
+    Deliberately quote-free where Hydra is concerned: the pod's shell strips quotes
+    before Hydra's grammar sees a value, so an em dash or bracket in a run name kills
+    config parsing. Variant identity therefore goes in as an ASCII ``variant`` tag.
+    """
+    ckpt = f"{BASE_CKPT_DIR}-{variant}" if variant else BASE_CKPT_DIR
+    return (
+        f'ck="{ckpt}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; resume=""; '
+        'if [ -f "$f" ]; then resume="checkpoint=$f"; echo "resuming from $f"; fi; '
+        "uv run -m ml.train +experiment=ml/mil_attention "
+        f"checkpoints_dir={ckpt} +metadata.hyperparams.variant={variant_tag(variant)} "
+        f"{overrides} $resume"
+    )
+
+
+def packed_plan(plan: str) -> list[str]:
+    """Turn ``tag:overrides;tag:overrides`` into backgrounded, log-prefixed lines.
+
+    ``sed -u`` prefixes every line with the tag so the variants stay separable in
+    ``kubectl logs``; the trailing ``echo`` reports the training exit code, which the
+    pod's own status would otherwise hide.
+    """
+    lines = []
+    for spec in filter(None, (s.strip() for s in plan.split(";"))):
+        tag, _, overrides = spec.partition(":")
+        lines.append(
+            f'( {train_command(tag, overrides)}; echo "exit $?" ) 2>&1 '
+            f'| sed -u "s|^|[{tag}] |" &'
+        )
+    if not lines:
+        raise ValueError(f"Empty TRAIN_PLAN: {plan!r}")
+    return lines
+
+
+def main() -> None:
+    variant = os.getenv("TRAIN_VARIANT", "")
+    plan = os.getenv("TRAIN_PLAN", "")
+    training = (
+        packed_plan(plan)
+        if plan
+        else [train_command(variant, os.getenv("TRAIN_OVERRIDES", ""))]
+    )
+    submit_job(
+        job_name=f"brc-grading-train-mil-attention-{variant}"
+        if variant
+        else "brc-grading-train-mil-attention",
+        image="cerit.io/rationai/base:2.0.6",
+        cpu=12,
+        memory="48Gi",
+        gpu="A40",
+        public=False,
+        script=[
+            "git clone https://github.com/RationAI/breast_cancer-grading.git workdir",
+            "cd workdir",
+            "uv sync --frozen",
+            "export PYTHONUNBUFFERED=1",
+            *training,
+            "sleep 300; nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader",
+            "wait",
+        ],
+        storage=[storage.secure.PROJECTS],
+    )
+
+
+if __name__ == "__main__":
+    main()
