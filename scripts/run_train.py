@@ -67,12 +67,16 @@ def train_command(variant: str, overrides: str = "") -> str:
     Deliberately quote-free where Hydra is concerned: the pod's shell strips quotes
     before Hydra's grammar sees a value, so an em dash or bracket in a run name kills
     config parsing. Variant identity therefore goes in as an ASCII ``variant`` tag.
+
+    Deliberately the venv's own python rather than ``uv run``: several concurrent
+    ``uv run`` calls in one pod fall back to the image's system python (3.14, without
+    the project deps), which is what killed the first pack3 attempt.
     """
     ckpt = f"{BASE_CKPT_DIR}-{variant}" if variant else BASE_CKPT_DIR
     return (
         f'ck="{ckpt}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; resume=""; '
         'if [ -f "$f" ]; then resume="checkpoint=$f"; echo "resuming from $f"; fi; '
-        "uv run -m ml.train +experiment=ml/mil_attention "
+        ".venv/bin/python -m ml.train +experiment=ml/mil_attention "
         f"checkpoints_dir={ckpt} +metadata.hyperparams.variant={variant_tag(variant)} "
         f"{overrides} $resume"
     )

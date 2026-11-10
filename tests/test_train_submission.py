@@ -40,6 +40,10 @@ for line, tag in zip(lines, ("att-s123", "att-s456", "mean-s123"), strict=True):
 
 assert "seed=123 datamodule.num_workers=2" in lines[0]
 assert "ml/aggregator=mean" in lines[2], "plan overrides reach the Hydra command"
+assert all(".venv/bin/python -m ml.train" in line for line in lines), (
+    "concurrent 'uv run' calls in one pod drop to the image's system python"
+)
+assert all("uv run" not in line for line in lines)
 assert all("metadata.run_name" not in line for line in lines), (
     "quoted run names break parsing"
 )
