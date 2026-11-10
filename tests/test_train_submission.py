@@ -90,4 +90,25 @@ for codes, want in (("0\n0\n", 0), ("0\n1\n", 1)):
     ).returncode
     assert got == want, f"status check must exit {want} for codes {codes!r}"
 
+# The cache shortcut is the expensive trap: EMB_CACHE_GB applies per split per worker and
+# a decoded bag is twice the on-disk fp16 size, so 0.75 GB x 4 workers OOMKilled three
+# 24 Gi pods in epoch 0. The submitter has to refuse that shape, and accept the one that
+# runs (explicit per-split trio, 4 workers, 32 Gi).
+assert run_train.cache_budget_gib("datamodule.num_workers=4", "0.75") == 18.0
+assert (
+    run_train.cache_budget_gib(
+        "datamodule.num_workers=4 datamodule.train.cache_mb=768"
+        " datamodule.val.cache_mb=512 datamodule.test.cache_mb=512",
+        "18",
+    )
+    == 14.0
+)
+try:
+    run_train.check_cache_budget(18.0, "24Gi")
+except SystemExit as error:
+    assert "bag cache" in str(error), error
+else:
+    raise AssertionError("the shape that OOMKilled three pods must be refused")
+run_train.check_cache_budget(14.0, "32Gi")  # the shape the finished runs used
+
 print("run_train plan-packing test passed")

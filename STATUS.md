@@ -135,14 +135,13 @@ rejected — a second seed at the config we keep would settle it for one job.
 Whole A40s only: MIG is unavailable on this cluster (11 nodes report "cannot allocate all claims",
 and the nodes with free slices have no free CPU).
 
-## Next batch (not submitted)
+## Next batch
 
-Cheapest first, one job each:
+(The arms above are submitted; these are the ones after them. Cheapest first, one job each.)
 
-1. **Three seeds of the config we now believe in** — 2048 tiles + attention + ordinal (the setting
-   with the best AUROC, at the data budget that wins). Seeds 456 / 123 / 789. That gives a
-   mean-of-three to compare against the mean-of-three for CE at the same setting, which is the only
-   honest way to rank the two losses.
+1. **Whatever the arms above confirm, confirm it with a second seed.** Regularisation and
+   checkpoint-selection moves are expected to be worth 1-3 points, which is *under* the 6-point
+   same-config seed spread — a single favourable arm is a hypothesis, not a recipe.
 2. **Ensemble the runs that have prediction dumps** (mean of the four softmax probability vectors,
    majority vote) — the dumps already exist, so this costs CPU minutes, not GPU:
 
@@ -197,6 +196,44 @@ PYTHONPATH=. .venv/bin/python scripts/report_variants.py --variants tiles2048_s4
 Verified: the CSV recompute reproduces MLflow exactly for the four variants that have dumps
 (`full_ord_s456` → bal 0.7637 / kappa 0.8995 / AUROC 0.9544 both ways).
 
+## Overnight batch: 8 arms, one knob each (submitted 2026-11-10 ~23:00 UTC)
+
+All at the config the last batch settled on — **2048 tiles/epoch, attention pooling** — so every
+arm is paired against a finished run at the **same seed**, and all of them dump per-slide
+predictions so they can join the ensemble afterwards. Pod shape 6 CPU / 32 Gi / whole A40,
+`cache_mb` 768/512/512, 4 workers.
+
+| arm | the one knob | paired against | what it asks |
+|---|---|---|---|
+| `t2048-w-s456` | class-weighted CE, `[0.28, 2.48, 0.66, 0.58]` | `tiles2048_s456` **0.7743** | does upweighting G1 lift balanced accuracy without wrecking c0/c2 |
+| `t2048-w-s123` | same, second seed | `att2048_s123` **0.7618** | is that reproducible |
+| `t2048-ord-s123` | ordinal loss, second seed | `att2048_s123` **0.7618** (CE) | is the ordinal AUROC edge real, is accuracy really a wash |
+| `t2048-acc-s456` | select/early-stop on `valid/accuracy` (mode max) instead of `valid/loss` | `tiles2048_s456` **0.7743** | we pick the epoch by a loss but report accuracy; the best-loss epoch is usually ~5 of 15 |
+| `t2048-acc-s123` | same, second seed | `att2048_s123` **0.7618** | reproducible |
+| `t2048-wd2-s456` | Adam `weight_decay` 1e-3 → 1e-2 | 0.7743 | the documented overfit (train acc 0.92 vs val 0.79) |
+| `t2048-dr02-s456` | head `dropout` 0.5 → 0.2 | 0.7743 | …or is 0.5 too strong for a 10 k-param head |
+| `t2048-t4096-s456` | `datamodule.train.max_tiles` 2048 → 4096 | 0.7743 | the budget was never swept: only 2048 vs *all* has been measured |
+
+The loss-selection knob deliberately leaves the LR scheduler on `valid/loss`: optimise on the
+loss, *choose* by the metric we report. `valid/accuracy` is balanced accuracy on 261 val slides,
+where c1 has 16 slides (6.25-point steps), so selection gets noisier — that is the risk in that
+pair of arms, not a bug.
+
+**Reading them in the morning** — MLflow is reachable from the laptop:
+
+```bash
+cd ~/Documents/rationAI/breast-cancer-grading
+export MLFLOW_TRACKING_URI=https://mlflow-s3.rationai.cloud.trusted.e-infra.cz
+MLFLOW_DISABLE_AGENT_HINT=1 PYTHONPATH=. .venv/bin/python /tmp/full_table.py   # all runs, recalls included
+# then re-ensemble everything that now has dumps (CPU pod, ~3 min):
+REPORT_JOB_NAME=brc-grading-ensemble2 REPORT_SCRIPT=ensemble_variants.py \
+REPORT_VARIANTS=full_s456,full_ord_s456,full_ord_s789,t2048_ord_s456,t2048_w_s456,t2048_ord_s123 \
+  uv run --no-sync python scripts/run_report.py
+```
+
+The first ensemble job (`brc-grading-ensemble`) finished at 23:4x UTC and **its output has not been
+read yet** — `kubectl logs -n rationai-jobs-ns <pod>` while the pod is still there.
+
 ## Plumbing facts worth keeping (each one cost a failed job)
 
 - **Bag-cache memory = `cache_mb` × 3 splits × `num_workers`.** `TRAIN_EMB_CACHE_GB`
@@ -205,6 +242,15 @@ Verified: the CSV recompute reproduces MLflow exactly for the four variants that
   (exit 137) inside six minutes on 2026-11-10** — before epoch 0 finished, so the job looks fine at
   15 min and dies between two polls. Earlier, 8 workers × (3072+1024+1024) MB ≈ 41 GB blew a 48 Gi
   pod at epoch ~4. The model needs 2–10 GiB of VRAM; **the cache decides the pod size.**
+- **The cache shortcut bit me twice; the submitter now refuses it.** `EMB_CACHE_GB=0.75` with 4
+  workers OOMKilled **3 of 3 pods in epoch 0 (exit 137, no traceback)** in 24 Gi pods on
+  2026-11-10. The arithmetic: the budget is *per worker per split* (0.75 × 3 × 4 = 9 GiB) **and a
+  decoded bag is float32 while the parquet is float16, so double it** → ~18 GiB wanted inside a
+  24 Gi pod. `scripts/run_train.py` now computes that and refuses anything over half the pod
+  (`cache_budget_gib` / `check_cache_budget`); the shape that has never failed is the explicit
+  `cache_mb` trio 768/512/512 with 4 workers in a **32 Gi** pod (14 GiB by that arithmetic).
+  The untouched config default is 3072 MB × 3 splits × 8 workers, i.e. ~144 GiB — always pass the
+  trio explicitly.
 - **A pod used to report `Succeeded` with training dead in its first minutes** — the script continued
   with `sleep 300; nvidia-smi; wait` to sample the GPU, so the exit code came from `wait`. Training
   now records its code in `/tmp/train_rc` and the last line fails the job; that turned four fake

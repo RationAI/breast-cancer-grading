@@ -51,6 +51,7 @@ samples ``nvidia-smi`` once at ~5 min so the packing is measured rather than ass
 """
 
 import os
+import re
 
 from kube_jobs import storage, submit_job
 
@@ -108,9 +109,52 @@ def packed_plan(plan: str) -> list[str]:
     return lines
 
 
+def cache_budget_gib(overrides: str, emb_cache_gb: str) -> float:
+    """GiB of bag cache the pod will want, for one training process.
+
+    ``EMB_CACHE_GB`` and ``datamodule.*.cache_mb`` are budgets **per dataloader worker,
+    per split**, and a decoded bag is float32 where the parquet on disk is float16, so
+    the real footprint is about twice the nominal number. This is the arithmetic that
+    OOMKilled three 24 Gi pods in epoch 0 (exit 137, no traceback) on 2026-11-10 at
+    ``EMB_CACHE_GB=0.75`` with 4 workers. A ``TRAIN_PLAN`` pack runs several processes in
+    one pod, so treat the result as a floor.
+    """
+    splits = [
+        int(m) for m in re.findall(r"(?:train|val|test)\.cache_mb=(\d+)", overrides)
+    ]
+    nominal_gib = sum(splits) / 1024 if len(splits) == 3 else float(emb_cache_gb) * 3
+    workers = re.search(r"num_workers=(\d+)", overrides)
+    return (
+        nominal_gib * (int(workers.group(1)) if workers else 8) * 2
+    )  # 8 = config default
+
+
+def check_cache_budget(gib: float, memory: str) -> None:
+    """Refuse a pod whose cache cannot fit alongside the batches in flight.
+
+    Half the pod is the line: the other half carries prefetched bags, torch, and the
+    CUDA host side, which is how the 24 Gi / 0.75 GB shape failed.
+    """
+    pod = float(re.sub(r"[^0-9.]", "", memory) or 0)
+    if gib > pod / 2:
+        raise SystemExit(
+            f"FATAL: bag cache would want ~{gib:.0f} GiB of a {memory} pod. Pass fewer "
+            "workers, a smaller datamodule.{train,val,test}.cache_mb, or more memory."
+        )
+
+
 def main() -> None:
     variant = os.getenv("TRAIN_VARIANT", "")
     plan = os.getenv("TRAIN_PLAN", "")
+    overrides_text = f"{os.getenv('TRAIN_OVERRIDES', '')} {plan}"
+    emb_gb = os.getenv("TRAIN_EMB_CACHE_GB", "")
+    if emb_gb or "cache_mb=" in overrides_text:
+        # Only when the budget was set on purpose: the config default (3 GB x 3 splits x
+        # 8 workers) is far over any pod and is somebody else's problem to redesign.
+        check_cache_budget(
+            cache_budget_gib(overrides_text, emb_gb or "18"),
+            os.getenv("TRAIN_MEMORY", "48Gi"),
+        )
     training = (
         packed_plan(plan)
         if plan
