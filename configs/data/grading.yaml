@@ -4,11 +4,14 @@
 dataset:
   name: bc20-24
   paths:
-    embeddings_dir: ???  # dir with one <slide_id>.parquet per slide (embeddings run output)
-    labels: ???         # CSV: slide_id, grade, split
+    # Same ${project_path} the preprocessing runs wrote to (see configs/base.yaml).
+    embeddings_dir: ${project_path}/embeddings/${dataset.name}
+    labels: ${project_path}/labels.csv
 
 datamodule:
   _target_: ml.data.DataModule
+  # Bags are large: median 61 MB / 7k tiles, p90 144 MB, max 336 MB (2560-dim
+  # float32 per tile), so host memory scales with batch_size * num_workers.
   batch_size: 8
   num_workers: 4
   class_balanced: true
