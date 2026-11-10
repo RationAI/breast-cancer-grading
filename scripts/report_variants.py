@@ -74,9 +74,16 @@ def metrics_from_logits(labels: np.ndarray, logits: np.ndarray) -> dict[str, flo
 
 
 def report_dumps(checkpoint_root: str, variant: str, best_epoch: int | None) -> None:
-    """Print recomputed test metrics for every dumped epoch of one variant."""
+    """Print recomputed test metrics for every dumped epoch of one variant.
+
+    ``variant`` is the MLflow param (underscores) while the checkpoint directory is
+    named from the job variant (dashes), so the two spellings are not interchangeable.
+    """
     pattern = os.path.join(
-        checkpoint_root, f"ml_attention-{variant}", "predictions", "test_epoch*.csv"
+        checkpoint_root,
+        f"ml_attention-{variant.replace('_', '-')}",
+        "predictions",
+        "test_epoch*.csv",
     )
     files = sorted(
         glob.glob(pattern), key=lambda p: int(p.rsplit("epoch", 1)[1].split(".")[0])
@@ -191,7 +198,7 @@ def main() -> None:
         default="tiles2048_s456,tiles2048_s123,att2048_s789,mean_s456,mean_s789,"
         "meanpool_s123,full_s456,full_ord_s456,full_ord_s789,t2048_ord_s456",
     )
-    parser.add_argument("--experiments", default="grading-mil-attention,grading")
+    parser.add_argument("--experiments", default="BRC Grading")
     parser.add_argument(
         "--checkpoint-root",
         default="/mnt/projects/breast_cancer/brc_grading/checkpoints",

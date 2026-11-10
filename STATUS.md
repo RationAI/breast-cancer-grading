@@ -160,6 +160,12 @@ prediction dumps make that possible, the script is not written.
   of the three splits, per worker. `EMB_CACHE_GB=2` with 4 workers is 24 GiB of cache, which OOMKilled
   two 32 Gi pods on 2026-11-10. Pass the three `datamodule.*.cache_mb` keys explicitly instead, and
   confirm with `--cfg job --resolve` before paying for a pod.
+- **MLflow is reachable from the laptop**, not just in-cluster: `MLFLOW_TRACKING_URI=https://
+  mlflow-s3.rationai.cloud.trusted.e-infra.cz`, our runs live in experiment **82 "BRC Grading"**
+  (in-cluster the same server is `http://mlflow-s3.rationai-mlflow`, which kube-jobs injects as
+  `MLFLOW_TRACKING_URI`). Only the shared PVC with the checkpoints and prediction CSVs needs a pod,
+  and the checkpoint directories are spelled with **dashes** (`ml_attention-full-ord-s456`) while
+  the MLflow `variant` param uses underscores (`full_ord_s456`).
 - **A pod used to report `Succeeded` with training dead in its first minutes** — the script
   continues with `sleep 300; nvidia-smi; wait` after training to sample the GPU, so the pod's
   exit code came from `wait`. Training now records its code in `/tmp/train_rc` and the last line
