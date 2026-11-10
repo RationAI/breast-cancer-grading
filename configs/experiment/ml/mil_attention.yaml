@@ -25,7 +25,7 @@ metadata:
     Multiple-instance-learning grading of breast carcinoma slides (4 classes:
     no tumour epithelium, G1, G2, G3) over frozen per-slide Virchow2 tile
     embeddings, gated-attention pooling + linear head.
-  hyperparameters:
+  hyperparams:
     encoder: ${ml.encoder._target_}
     aggregator: ${ml.aggregator._target_}
     head: ${ml.head._target_}
@@ -33,3 +33,4 @@ metadata:
     lr: ${ml.optimizer.lr}
     batch_size: ${datamodule.batch_size}
     max_epochs: ${trainer.max_epochs}
+    dataset_run_id: ${dataset.run_id}  # the embeddings run this model trains on

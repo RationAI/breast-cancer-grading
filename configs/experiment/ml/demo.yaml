@@ -24,7 +24,7 @@ metadata:
   description: |
     Synthetic 4-class (N/G1/G2/G3) embedding bags verifying the grading
     pipeline end to end on CPU.
-  hyperparameters:
+  hyperparams:
     encoder: ${ml.encoder._target_}
     aggregator: ${ml.aggregator._target_}
     head: ${ml.head._target_}
