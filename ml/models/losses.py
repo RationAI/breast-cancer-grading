@@ -65,4 +65,22 @@ class OrdinalCrossEntropy(nn.Module):
         return -(pos * log_gt + (1.0 - pos) * log_le).mean()
 
 
-__all__ = ["OrdinalCrossEntropy"]
+def weighted_cross_entropy(weight: list[float]) -> nn.CrossEntropyLoss:
+    """``CrossEntropyLoss`` whose class weights survive a Hydra override.
+
+    ``CrossEntropyLoss`` keeps ``weight`` in a buffer and rejects the ``ListConfig``
+    Hydra passes it -- ``+ml.loss.weight=[...]`` composes fine, reaches the pod and
+    dies at instantiation with "cannot assign 'ListConfig' object to buffer 'weight'".
+    This factory is the seam that converts the list, and putting it in
+    ``configs/ml/loss/weighted_cross_entropy.yaml`` means the weights are logged as
+    hyperparameters instead of hiding in a job's command line.
+
+    Args:
+        weight: One weight per grade. Inverse training frequency normalised to mean 1
+            is ``[0.28, 2.48, 0.66, 0.58]`` for bc20-24, which keeps cross-entropy's
+            scale so the learning rate does not have to move with it.
+    """
+    return nn.CrossEntropyLoss(weight=torch.as_tensor(weight, dtype=torch.float32))
+
+
+__all__ = ["OrdinalCrossEntropy", "weighted_cross_entropy"]

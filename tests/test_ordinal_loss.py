@@ -1,4 +1,4 @@
-"""Ordinal loss for the ordered Nottingham grades (ml/models/losses.py)."""
+"""The two loss variants in ml/models/losses.py (ordinal, class-weighted CE)."""
 
 import sys
 from pathlib import Path
@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ml.models.losses import OrdinalCrossEntropy
+from ml.models.losses import OrdinalCrossEntropy, weighted_cross_entropy
 
 
 loss = OrdinalCrossEntropy(num_classes=4)
@@ -66,4 +66,50 @@ for bad, want in (
     else:
         raise AssertionError(f"{want!r} must be rejected")
 
-print("ordinal loss test passed")
+# Class weights have to arrive as a Tensor: Hydra gives CrossEntropyLoss a ListConfig
+# and torch refuses it at instantiation, i.e. 10 minutes into a pod.
+weighted = weighted_cross_entropy([0.28, 2.48, 0.66, 0.58])
+assert torch.is_tensor(weighted.weight) and weighted.weight.dtype is torch.float32
+assert weighted.weight.shape == (4,)
+plain = torch.nn.CrossEntropyLoss()
+uniform = torch.nn.CrossEntropyLoss(weight=torch.ones(4))
+flat = torch.tensor([[2.0, -2.0, 0.0, 0.0]])
+assert torch.allclose(
+    weighted_cross_entropy([1.0, 1.0, 1.0, 1.0])(flat, torch.tensor([1])),
+    plain(flat, torch.tensor([1])),
+), "uniform weights must be plain CE"
+
+# A batch of two slides: the rare class (1) answered wrongly, class 0 answered right.
+# PyTorch's weighted "mean" divides by the *sum of the selected weights*, so weights
+# rebalance classes against each other instead of scaling the loss (a single-sample
+# batch cancels them exactly), which is why this needs a mixed-class batch.
+x = torch.tensor([[2.0, -2.0, 0.0, 0.0], [2.0, 0.0, -2.0, 0.0]])
+y = torch.tensor([1, 0])
+assert weighted(x, y) > uniform(x, y), "upweighting the missed class must cost more"
+assert weighted_cross_entropy([2.48, 0.28, 0.66, 0.58])(x, y) < uniform(x, y), (
+    "and upweighting the class the batch gets right must cost less"
+)
+assert float(weighted(x, y)) > 1.5 * float(uniform(x, y)), (
+    f"the rare-class miss should dominate: {float(weighted(x, y)):.2f}"
+    f" vs {float(uniform(x, y)):.2f}"
+)
+
+# The shipped config group has to instantiate, not just compose.
+from hydra import compose, initialize_config_dir
+from hydra.utils import instantiate
+
+
+with initialize_config_dir(
+    config_dir=str(Path(__file__).resolve().parents[1] / "configs"), version_base=None
+):
+    cfg = compose(
+        config_name="ml",
+        overrides=["+experiment=ml/mil_attention", "ml/loss=weighted_cross_entropy"],
+    )
+    built = instantiate(cfg.ml.loss)
+assert isinstance(built, torch.nn.CrossEntropyLoss), built
+assert torch.allclose(built.weight, torch.tensor([0.28, 2.48, 0.66, 0.58])), (
+    built.weight
+)
+
+print("loss tests passed (ordinal + weighted CE)")

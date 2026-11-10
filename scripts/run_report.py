@@ -6,6 +6,8 @@ the cluster, and this laptop's kubeconfig cannot even list services outside
 
     uv run --no-sync python scripts/run_report.py
     REPORT_VARIANTS=full_s456,full_ord_s456 uv run --no-sync python scripts/run_report.py
+    REPORT_JOB_NAME=brc-grading-ensemble REPORT_SCRIPT=ensemble_variants.py \
+      uv run --no-sync python scripts/run_report.py
 
 Then read it from the pod's logs::
 
@@ -36,7 +38,7 @@ submit_job(
         "cd workdir",
         "[ -f pyproject.toml ] || { echo 'FATAL: clone failed, no pyproject.toml'; exit 1; }",
         "uv sync --frozen",
-        ".venv/bin/python scripts/report_variants.py"
+        f".venv/bin/python scripts/{os.getenv('REPORT_SCRIPT', 'report_variants.py')}"
         + (
             f" --variants {os.environ['REPORT_VARIANTS']}"
             if os.getenv("REPORT_VARIANTS")

@@ -1,0 +1,5 @@
+# Class weights: inverse training frequency (593/68/254/293 slides), normalised to mean
+# 1 so the loss keeps cross-entropy's scale. Aimed at class 1 (68 train slides), whose
+# test recall is 0.29-0.79 across runs while class 0 never drops below 0.98.
+_target_: ml.models.losses.weighted_cross_entropy
+weight: [0.28, 2.48, 0.66, 0.58]
