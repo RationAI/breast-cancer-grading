@@ -38,9 +38,9 @@ VARIANT = os.getenv("TRAIN_VARIANT", "")
 OVERRIDES = os.getenv("TRAIN_OVERRIDES", "")
 SUFFIX = f"-{VARIANT}" if VARIANT else ""
 CKPT_DIR = f"/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention{SUFFIX}"
-RUN_NAME = "Attention MIL — Nottingham grading (Virchow2 embeddings)" + (
-    f" [{VARIANT}]" if VARIANT else ""
-)
+# Variant tag goes in as a Hydra override, so it must be plain ASCII without spaces
+# (the shell strips quotes before Hydra's grammar sees them).
+VARIANT_TAG = VARIANT.replace("-", "_").replace(".", "_") or "baseline"
 
 
 submit_job(
@@ -62,8 +62,8 @@ submit_job(
             'resume=""; if [ -f "$f" ]; then resume="checkpoint=$f"; echo "Resuming from $f"; fi'
         ),
         (
-            f'uv run -m ml.train +experiment=ml/mil_attention metadata.run_name="{RUN_NAME}" '
-            f"checkpoints_dir={CKPT_DIR} {OVERRIDES} $resume"
+            f"uv run -m ml.train +experiment=ml/mil_attention checkpoints_dir={CKPT_DIR} "
+            f"+metadata.hyperparams.variant={VARIANT_TAG} {OVERRIDES} $resume"
         ),
     ],
     storage=[storage.secure.PROJECTS],
