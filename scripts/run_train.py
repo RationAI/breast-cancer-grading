@@ -32,10 +32,10 @@ them is what actually uses the GPU. Keep both budgets inside the pod:
 * RAM: ``num_workers`` is per variant, and each worker process holds its own
   ``datamodule.*.cache_mb`` bag cache -- 3 variants x (2 workers + main) x 3 GB is
   ~27 GiB of the 48 Gi requested;
-* CPU: ~3 per variant at ``num_workers=2``, and the GPU nodes are shared with the
-  other runs -- 12 CPUs is often not allocatable alongside them, so ``TRAIN_CPU`` is a
-  knob (6 fits a packed pod next to three solo ones; the bag cache, not CPU, feeds the
-  GPU once epochs 2+ skip the NAS).
+* CPU: ~3 per variant at ``num_workers=2``. Keep the default 12 unless the scheduler
+  refuses: dropping to 6 put the pack on a node without GitHub egress, so ``git clone``
+  failed (``could not read Username for 'https://github.com'``) and the pod trained
+  nothing. Prefer deleting a finished job over shrinking a request.
 
     TRAIN_VARIANT=pack3 TRAIN_PLAN="att-s123:seed=123 datamodule.num_workers=2;\
     att-s456:seed=456 datamodule.num_workers=2;\
@@ -68,9 +68,9 @@ def train_command(variant: str, overrides: str = "") -> str:
     before Hydra's grammar sees a value, so an em dash or bracket in a run name kills
     config parsing. Variant identity therefore goes in as an ASCII ``variant`` tag.
 
-    Deliberately the venv's own python rather than ``uv run``: several concurrent
-    ``uv run`` calls in one pod fall back to the image's system python (3.14, without
-    the project deps), which is what killed the first pack3 attempt.
+    Deliberately the venv's own python rather than ``uv run``: three variants share one
+    pod, and going through the synced venv directly skips uv's project resolution and
+    lock on the critical path (uv is still what builds the venv, one line earlier).
     """
     ckpt = f"{BASE_CKPT_DIR}-{variant}" if variant else BASE_CKPT_DIR
     return (
@@ -122,6 +122,9 @@ def main() -> None:
         script=[
             "git clone https://github.com/RationAI/breast_cancer-grading.git workdir",
             "cd workdir",
+            # Fail loudly: without this the pod trains nothing, sleeps, and exits 0 with a
+            # green job status (git's credential failure looked like a success downstream).
+            "[ -f pyproject.toml ] || { echo 'FATAL: clone failed, no pyproject.toml'; exit 1; }",
             "uv sync --frozen",
             "export PYTHONUNBUFFERED=1",
             *training,
