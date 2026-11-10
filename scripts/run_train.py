@@ -14,6 +14,10 @@ PVC, and resubmitting picks up ``last.ckpt`` automatically, so a preempted pod
 continues instead of restarting. To deliberately retrain from scratch, delete that
 directory (or pass ``checkpoint=null`` after removing it).
 
+kube-jobs names the job ``<job_name>-<user>``, so one resubmit per attempt:
+``kubectl delete job brc-grading-train-mil-attention-<user> -n rationai-jobs-ns``
+(the failed attempt keeps its record in MLflow, so nothing is lost).
+
 Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB) and ~8 slide
 parquets are decoded per second, so most of the RAM budget is dataloader workers
 holding bags in flight. Raise ``memory`` before ``datamodule.num_workers``.
