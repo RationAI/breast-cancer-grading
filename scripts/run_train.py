@@ -24,9 +24,11 @@ variant)::
 
     TRAIN_VARIANT=tiles2048-s123 TRAIN_OVERRIDES="seed=123" python scripts/run_train.py
 
-Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB) and validation /
-test always read whole slides, so most of the RAM budget is dataloader workers
-holding bags in flight. Raise ``memory`` before ``datamodule.num_workers``.
+Host memory: each dataloader worker keeps its own fp16 bag cache
+(``datamodule.train.cache_mb``, 3 GB) plus the bags it has in flight (median 61 MB,
+p90 144 MB, max 336 MB), so 8 workers sit near 25-30 GiB of the 48 Gi requested and
+epochs after the first do no NAS reads. Raise ``memory`` before ``num_workers`` or
+``cache_mb``.
 """
 
 import os

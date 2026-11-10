@@ -1,10 +1,10 @@
 """Check QC mask files for OpenSlide/TiffFile readability on the cluster."""
-import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 import tifffile
 from openslide import OpenSlide
+
 
 BASE = Path("/mnt/data/work/home/jovyan/k8s/rationai/namespaces/dp-quality-control/shared-volumes/qc-mask-storage")
 
@@ -62,7 +62,7 @@ for name, mask_dir in MASKS.items():
     print(f"  OpenSlide FAIL: {stats[name]['openslide_fail']}/{len(tiff_files)}")
 
     if failures[name]:
-        print(f"\n  First 5 failures:")
+        print("\n  First 5 failures:")
         for fname, err in failures[name][:5]:
             print(f"    {fname}: {err}")
         if len(failures[name]) > 5:

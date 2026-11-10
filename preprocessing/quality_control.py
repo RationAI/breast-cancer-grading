@@ -19,6 +19,7 @@ from rationai.provenance import log_provenance
 from rationai.types import SlideCheckConfig
 from tqdm import tqdm
 
+
 # One representative output file per slide — if it exists, the slide is done.
 MARKER_DIR = "ResidualArtifactsAndCoverage/artifacts_coverage"
 MARKER_FILE = "{stem}.tiff"

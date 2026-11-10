@@ -36,3 +36,4 @@ metadata:
     dataset_run_id: ${dataset.run_id}  # the embeddings run this model trains on
     seed: ${seed}
     max_tiles: ${datamodule.train.max_tiles}
+    bag_cache_mb: ${datamodule.train.cache_mb}  # per dataloader worker process
