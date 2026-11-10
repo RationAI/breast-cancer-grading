@@ -32,7 +32,10 @@ them is what actually uses the GPU. Keep both budgets inside the pod:
 * RAM: ``num_workers`` is per variant, and each worker process holds its own
   ``datamodule.*.cache_mb`` bag cache -- 3 variants x (2 workers + main) x 3 GB is
   ~27 GiB of the 48 Gi requested;
-* CPU: ~3 per variant at ``num_workers=2``.
+* CPU: ~3 per variant at ``num_workers=2``, and the GPU nodes are shared with the
+  other runs -- 12 CPUs is often not allocatable alongside them, so ``TRAIN_CPU`` is a
+  knob (6 fits a packed pod next to three solo ones; the bag cache, not CPU, feeds the
+  GPU once epochs 2+ skip the NAS).
 
     TRAIN_VARIANT=pack3 TRAIN_PLAN="att-s123:seed=123 datamodule.num_workers=2;\
     att-s456:seed=456 datamodule.num_workers=2;\
@@ -107,8 +110,8 @@ def main() -> None:
         if variant
         else "brc-grading-train-mil-attention",
         image="cerit.io/rationai/base:2.0.6",
-        cpu=12,
-        memory="48Gi",
+        cpu=int(os.getenv("TRAIN_CPU", "12")),
+        memory=os.getenv("TRAIN_MEMORY", "48Gi"),
         gpu="A40",
         public=False,
         script=[
