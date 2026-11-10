@@ -18,19 +18,33 @@ kube-jobs names the job ``<job_name>-<user>``, so one resubmit per attempt:
 ``kubectl delete job brc-grading-train-mil-attention-<user> -n rationai-jobs-ns``
 (the failed attempt keeps its record in MLflow, so nothing is lost).
 
-Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB) and ~8 slide
-parquets are decoded per second, so most of the RAM budget is dataloader workers
+Variant runs, so several configs can train side by side without sharing a
+checkpoint directory (job name, checkpoint dir and MLflow run name all follow the
+variant)::
+
+    TRAIN_VARIANT=tiles2048-s123 TRAIN_OVERRIDES="seed=123" python scripts/run_train.py
+
+Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB) and validation /
+test always read whole slides, so most of the RAM budget is dataloader workers
 holding bags in flight. Raise ``memory`` before ``datamodule.num_workers``.
 """
+
+import os
 
 from kube_jobs import storage, submit_job
 
 
-CKPT_DIR = "/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention"
+VARIANT = os.getenv("TRAIN_VARIANT", "")
+OVERRIDES = os.getenv("TRAIN_OVERRIDES", "")
+SUFFIX = f"-{VARIANT}" if VARIANT else ""
+CKPT_DIR = f"/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention{SUFFIX}"
+RUN_NAME = "Attention MIL — Nottingham grading (Virchow2 embeddings)" + (
+    f" [{VARIANT}]" if VARIANT else ""
+)
 
 
 submit_job(
-    job_name="brc-grading-train-mil-attention",
+    job_name=f"brc-grading-train-mil-attention{SUFFIX}",
     image="cerit.io/rationai/base:2.0.6",
     cpu=12,
     memory="48Gi",
@@ -47,7 +61,10 @@ submit_job(
             f'ck="{CKPT_DIR}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; '
             'resume=""; if [ -f "$f" ]; then resume="checkpoint=$f"; echo "Resuming from $f"; fi'
         ),
-        "uv run -m ml.train +experiment=ml/mil_attention $resume",
+        (
+            f'uv run -m ml.train +experiment=ml/mil_attention metadata.run_name="{RUN_NAME}" '
+            f"checkpoints_dir={CKPT_DIR} {OVERRIDES} $resume"
+        ),
     ],
     storage=[storage.secure.PROJECTS],
 )

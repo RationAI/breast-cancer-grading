@@ -32,13 +32,22 @@ class GradingDataset(Dataset[MILSample]):
         labels_csv: CSV with columns ``slide_id``, ``grade`` (0 = negative,
             1 = G1, 2 = G2, 3 = G3), ``split`` (train/val/test).
         split: Which split to serve — rows with a different ``split`` are dropped.
+        max_tiles: Cap the bag at this many tiles, sampled afresh every epoch.
+            Train-only in practice (set it on the train split alone): it is both
+            the standard MIL bag augmentation and what makes an epoch affordable —
+            a median slide carries ~7k tiles / 61 MB of parquet.
     """
 
     def __init__(
-        self, embeddings_dir: str | Path, labels_csv: str | Path, split: str
+        self,
+        embeddings_dir: str | Path,
+        labels_csv: str | Path,
+        split: str,
+        max_tiles: int | None = None,
     ) -> None:
         self.embeddings_dir = Path(embeddings_dir)
         self.split = split
+        self.max_tiles = max_tiles
         self.slides = (
             pd.read_csv(labels_csv)
             .loc[lambda df: df[SPLIT_COLUMN] == split]
@@ -70,5 +79,12 @@ class GradingDataset(Dataset[MILSample]):
         row = self.slides.iloc[idx]
         frame = pd.read_parquet(self.embeddings_dir / f"{row[SLIDE_COLUMN]}.parquet")
         bag = torch.from_numpy(np.stack(frame["embedding"].to_numpy())).float()
+        if self.max_tiles is not None and bag.size(0) > self.max_tiles:
+            # A different tile subset per epoch, so the attention cannot memorise
+            # individual tiles. Reproducible: Lightning's ``seed_everything
+            # (workers=True)`` reseeds each worker per epoch, so the same seed
+            # replays the same schedule of subsets.
+            keep = torch.randperm(bag.size(0))[: self.max_tiles]
+            bag = bag[keep]
         label = torch.tensor(int(row[GRADE_COLUMN]), dtype=torch.long)
         return bag, label, SlideMetadata(slide_id=str(row[SLIDE_COLUMN]))

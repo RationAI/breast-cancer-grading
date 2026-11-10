@@ -34,3 +34,5 @@ metadata:
     batch_size: ${datamodule.batch_size}
     max_epochs: ${trainer.max_epochs}
     dataset_run_id: ${dataset.run_id}  # the embeddings run this model trains on
+    seed: ${seed}
+    max_tiles: ${datamodule.train.max_tiles}
