@@ -18,7 +18,17 @@ callbacks:
     save_top_k: 1
     filename: best
     dirpath: ${checkpoints_dir}
-    save_last: true  # last.ckpt = resume point (epoch, optimizer, scheduler state)
+    save_last: true  # only rewritten when valid/loss improves (Lightning gates it)
+  resume_point:
+    # Preemption insurance: Lightning rewrites ``last.ckpt`` only on improvement,
+    # so after a plateau it can be many epochs stale. This one saves unconditionally
+    # every epoch to a fixed path, overwriting itself (one 32 MB file rolling).
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${checkpoints_dir}
+    filename: resume
+    save_top_k: 1
+    every_n_epochs: 1
+    enable_version_counter: false  # overwrite resume.ckpt in place, no resume_v1.ckpt pile-up
   lr_monitor:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: epoch

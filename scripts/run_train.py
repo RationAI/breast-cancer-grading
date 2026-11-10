@@ -10,9 +10,9 @@ Data it reads (all on the PROJECTS mount, paths from ``configs/data/grading.yaml
   embedded slides (``make_cohort.py --require-embeddings`` enforces that).
 
 Resumable: checkpoints go to ``<project_path>/checkpoints/ml_attention`` on the
-PVC, and resubmitting picks up ``last.ckpt`` automatically, so a preempted pod
-continues instead of restarting. To deliberately retrain from scratch, delete that
-directory (or pass ``checkpoint=null`` after removing it).
+PVC, and resubmitting picks up ``resume.ckpt`` (saved unconditionally every epoch)
+automatically, so a preempted pod continues instead of restarting. To deliberately
+retrain from scratch, delete that directory.
 
 kube-jobs names the job ``<job_name>-<user>``, so one resubmit per attempt:
 ``kubectl delete job brc-grading-train-mil-attention-<user> -n rationai-jobs-ns``
@@ -41,10 +41,11 @@ submit_job(
         "cd workdir",
         "uv sync --frozen",
         "export PYTHONUNBUFFERED=1",
-        # Resume in place if a previous attempt left a checkpoint behind.
+        # Resume in place if a previous attempt left a checkpoint behind. ``resume``
+        # is written every epoch; ``last`` only on improvement (older attempts).
         (
-            f'last="{CKPT_DIR}/last.ckpt"; resume=""; '
-            'if [ -f "$last" ]; then resume="checkpoint=$last"; echo "Resuming from $last"; fi'
+            f'ck="{CKPT_DIR}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; '
+            'resume=""; if [ -f "$f" ]; then resume="checkpoint=$f"; echo "Resuming from $f"; fi'
         ),
         "uv run -m ml.train +experiment=ml/mil_attention $resume",
     ],
