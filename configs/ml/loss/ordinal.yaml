@@ -1,0 +1,2 @@
+_target_: ml.models.losses.OrdinalCrossEntropy
+num_classes: ${num_classes}

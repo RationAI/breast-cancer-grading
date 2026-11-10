@@ -82,6 +82,7 @@ def train_command(variant: str, overrides: str = "") -> str:
     return (
         f'ck="{ckpt}"; f="$ck/resume.ckpt"; [ -f "$f" ] || f="$ck/last.ckpt"; resume=""; '
         'if [ -f "$f" ]; then resume="checkpoint=$f"; echo "resuming from $f"; fi; '
+        'export PREDICTIONS_DIR="$ck/predictions"; '
         ".venv/bin/python -m ml.train +experiment=ml/mil_attention "
         f"checkpoints_dir={ckpt} +metadata.hyperparams.variant={variant_tag(variant)} "
         f'{overrides} $resume; code=$?; echo "$code" >> /tmp/train_rc; echo "training exit $code"'

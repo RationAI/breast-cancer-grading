@@ -10,3 +10,8 @@ loss: ???
 optimizer: ???
 lr_scheduler: ???
 metrics: ???
+
+# Per-slide val/test logits go here when set (one CSV per epoch) — the input for
+# ensembling runs and paired significance tests. Opt in per job with PREDICTIONS_DIR;
+# unset writes nothing.
+predictions_dir: ${oc.env:PREDICTIONS_DIR,null}

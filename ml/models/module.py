@@ -13,9 +13,11 @@ Metrics receive softmax probabilities (``torchmetrics`` multiclass AUROC expects
 scores; argmax-based metrics are invariant to the monotone map).
 """
 
+import csv
 import functools
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import lightning.pytorch as pl
@@ -47,6 +49,10 @@ class GradingModule(pl.LightningModule):
         lr_scheduler: Optional dict with a ``scheduler`` partial and an optional
             ``monitor`` key.
         metrics: Torchmetrics keyed by name; cloned per ``train``/``valid``/``test``.
+        predictions_dir: Write per-slide ``valid``/``test`` logits here, one CSV per
+            epoch (``<stage>_epoch<N>.csv``). Ensembling runs, paired (McNemar)
+            comparisons and confusion analysis all need per-slide predictions, which
+            epoch-level metrics throw away. ``None`` (the default) writes nothing.
     """
 
     def __init__(
@@ -58,6 +64,7 @@ class GradingModule(pl.LightningModule):
         optimizer: functools.partial[torch.optim.Optimizer] | None = None,
         lr_scheduler: dict[str, Any] | None = None,
         metrics: dict[str, torchmetrics.Metric] | None = None,
+        predictions_dir: str | None = None,
     ) -> None:
         super().__init__()
         self.encoder = encoder
@@ -66,6 +73,14 @@ class GradingModule(pl.LightningModule):
         self.loss = loss
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        # ``${oc.env:PREDICTIONS_DIR,null}`` yields the literal string when unset.
+        self.predictions_dir = (
+            None if predictions_dir in (None, "", "null") else Path(predictions_dir)
+        )
+        self._pred_rows: dict[str, list[tuple[str, int, Tensor]]] = {
+            "valid": [],
+            "test": [],
+        }
 
         base = torchmetrics.MetricCollection(dict(metrics) if metrics else {})
         self.train_metrics = base.clone(prefix="train/")
@@ -129,6 +144,17 @@ class GradingModule(pl.LightningModule):
         self.log_dict(metrics, on_step=False, on_epoch=True)
         if stage != "train":
             self.confusion.update(torch.softmax(y_pred, dim=-1), y)
+            if self.predictions_dir is not None:
+                rows = self._pred_rows[stage]
+                slide_labels = [int(v) for v in y.detach().tolist()]
+                for i, sample in enumerate(batch):
+                    rows.append(
+                        (
+                            sample[2]["slide_id"],
+                            slide_labels[i],
+                            y_pred[i].detach().cpu(),
+                        )
+                    )
         return loss
 
     def _log_confusion(self, stage: str) -> None:
@@ -141,11 +167,35 @@ class GradingModule(pl.LightningModule):
             print(f"\n{stage} confusion matrix (rows = true class 0..3):\n{cm}")
         self.confusion.reset()
 
+    def _dump_predictions(self, stage: str) -> None:
+        """Write this epoch's per-slide logits, then forget them.
+
+        Logits, not probabilities: a downstream average is the point of the file, and
+        argmax-based metrics are unaffected by the choice.
+        """
+        rows, self._pred_rows[stage] = self._pred_rows[stage], []
+        if not rows or self.predictions_dir is None:
+            return
+        self.predictions_dir.mkdir(parents=True, exist_ok=True)
+        path = self.predictions_dir / f"{stage}_epoch{self.current_epoch}.csv"
+        with path.open("w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(
+                ["slide_id", "label"] + [f"logit_{i}" for i in range(self.head.out_dim)]
+            )
+            for slide_id, label, logits in rows:
+                writer.writerow(
+                    [slide_id, label] + [f"{v:.6f}" for v in logits.tolist()]
+                )
+        logger.info("wrote %d %s predictions to %s", len(rows), stage, path)
+
     def on_validation_epoch_end(self) -> None:
         self._log_confusion("valid")
+        self._dump_predictions("valid")
 
     def on_test_epoch_end(self) -> None:
         self._log_confusion("test")
+        self._dump_predictions("test")
 
     def training_step(self, batch: list[MILSample], batch_idx: int) -> Tensor:
         return self._step(batch, "train", self.train_metrics)

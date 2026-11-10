@@ -27,10 +27,13 @@ datamodule:
     # split is ~7.8 GB of fp16 bags over 8 workers ≈ 1 GB each, so 3 GB covers train,
     # val and test without eviction and epochs after the first read no NAS at all.
     cache_mb: 3072
-    # Bag augmentation + cost control: 2048 of ~7k tiles per slide, resampled each
-    # epoch. The model overfit (train acc 0.92 / val 0.79, flat from epoch ~5), so
-    # this is regularization first and a ~3x I/O saving second.
-    max_tiles: 2048
+    # Whole bags. Measured tiles/slide over the cohort: p25 2.3k, median 6.5k, p75 12.3k,
+    # max 27k — and strongly class-correlated (c0 median 2.5k vs 9-11k for the tumour
+    # grades), so sub-sampling to a fixed 2048 truncated the three hard classes to ~20 %
+    # while leaving c0 nearly intact, which leaks the label through bag size (log tile
+    # count alone scores 0.579 raw accuracy / 0.509 QWK on test) and did not match the
+    # full-bag val/test loaders at all. null costs ~4x tiles per step.
+    max_tiles: null
   val:
     <<: *dataset
     split: val
