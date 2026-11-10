@@ -34,6 +34,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+
 # Column names in the records CSV (semicolon-separated).
 RECORD_COL = "record"
 GRADE_COL = "grade"
@@ -61,6 +62,7 @@ EXCLUDED_SLIDES = {
 # different stain, not morphology, and are excluded from the grading cohort.
 import re
 
+
 TUMOUR_RE = re.compile(r"-T\d?$")
 NORMAL_RE = re.compile(r"-N\d?$")
 
@@ -79,6 +81,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ext", default=".mrxs",
         help="Slide file extension present on disk (default .mrxs).",
+    )
+    p.add_argument(
+        "--require-embeddings", default=None, metavar="DIR",
+        help="Drop slides with no <slide_id>.parquet in DIR (slides excluded from "
+        "embedding, e.g. for missing QC masks, cannot be trained on).",
     )
     return p.parse_args()
 
@@ -210,6 +217,14 @@ def main() -> None:
         for tail, count in top[:15]:
             print(f"  {tail}: {count}", file=sys.stderr)
 
+    # Slides excluded from embedding (missing QC masks) cannot be trained on —
+    # dropping them here beats failing in GradingDataset with a missing-file error.
+    if args.require_embeddings:
+        emb_dir = Path(args.require_embeddings)
+        before = len(slides)
+        slides = [s for s in slides if (emb_dir / f"{s['slide_id']}.parquet").is_file()]
+        print(f"Dropped {before - len(slides)} slides without embeddings in {emb_dir}")
+
     # 2. Split: assign per CASE, stratified by the case's Nottingham grade.
     # A case's T slide carries that grade and its N slide is grade 0, so a case
     # spans two slide-grades — stratifying by slide grade would let one case land
@@ -219,7 +234,7 @@ def main() -> None:
     for case, grade in cases.items():
         by_grade[grade].append(case)
     case_split: dict[str, str] = {}
-    for grade, case_list in by_grade.items():
+    for case_list in by_grade.values():
         rng.shuffle(case_list)
         n = len(case_list)
         n_train = round(n * SPLIT_FRACTIONS["train"])

@@ -10,10 +10,13 @@ dataset:
 
 datamodule:
   _target_: ml.data.DataModule
-  # Bags are large: median 61 MB / 7k tiles, p90 144 MB, max 336 MB (2560-dim
-  # float32 per tile), so host memory scales with batch_size * num_workers.
+  # Reading + decoding one slide parquet (~0.5 s for a median 61 MB bag) dominates
+  # the GPU step (~10 ms), so throughput scales with dataloader workers. Host RAM
+  # grows with batch_size * num_workers (bags in flight: median 61 MB, p90 144 MB,
+  # max 336 MB) — raise run_train.py's memory along with these two.
   batch_size: 8
-  num_workers: 4
+  num_workers: 8
+  persistent_workers: true
   class_balanced: true
   train: &dataset
     _target_: ml.data.datasets.GradingDataset

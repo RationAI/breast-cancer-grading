@@ -7,6 +7,10 @@ seed: ${random_seed:}
 mode: fit  # fit | validate | test | predict
 checkpoint: null  # path to a .ckpt to resume (fit) or load weights (validate/test/predict)
 
+# Checkpoints live on the shared PVC, not in the pod's ephemeral Hydra run dir,
+# so a killed pod can resume where it stopped. One directory per experiment.
+checkpoints_dir: ${project_path}/checkpoints/ml_attention
+
 # After a `fit` run, evaluate the best checkpoint on the test split so models are
 # directly comparable on held-out data right after training. Ignored unless mode=fit.
 test_after_fit: true

@@ -42,8 +42,10 @@ if __name__ == "__main__":
             "uv sync --frozen",
             "export HF_HOME=/mnt/projects/breast_cancer/brc_grading/huggingface_cache",
             "export PYTHONUNBUFFERED=1",
-            "uv run -m preprocessing.embeddings +experiment=preprocessing/embeddings/virchow2"
-            " precision=bf16-mixed dataloader.batch_size=512",
+            (
+                "uv run -m preprocessing.embeddings +experiment=preprocessing/embeddings/virchow2"
+                " precision=bf16-mixed dataloader.batch_size=512"
+            ),
         ],
         storage=[
             storage.secure.DATA,

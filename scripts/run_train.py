@@ -6,22 +6,30 @@ Data it reads (all on the PROJECTS mount, paths from ``configs/data/grading.yaml
   the embeddings job, archived as artifacts of MLflow run
   ``96532a9ff29241e4b65d57dbc379e944`` (that run's id is pinned in
   ``configs/ml.yaml`` as the provenance pointer);
-* ``<project_path>/labels.csv`` — ``slide_id, grade, split``; regenerate with
-  ``scripts/make_cohort.py`` if the cohort changed.
+* ``<project_path>/labels.csv`` — ``slide_id, grade, split``; must list exactly the
+  embedded slides (``make_cohort.py --require-embeddings`` enforces that).
 
-Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB), so a batch of
-8 read by 4 workers needs ~32 GiB of RAM in flight; raise ``memory`` before
-raising ``datamodule.batch_size`` / ``num_workers``.
+Resumable: checkpoints go to ``<project_path>/checkpoints/ml_attention`` on the
+PVC, and resubmitting picks up ``last.ckpt`` automatically, so a preempted pod
+continues instead of restarting. To deliberately retrain from scratch, delete that
+directory (or pass ``checkpoint=null`` after removing it).
+
+Host memory: bags are big (median 61 MB, p90 144 MB, max 336 MB) and ~8 slide
+parquets are decoded per second, so most of the RAM budget is dataloader workers
+holding bags in flight. Raise ``memory`` before ``datamodule.num_workers``.
 """
 
 from kube_jobs import storage, submit_job
 
 
+CKPT_DIR = "/mnt/projects/breast_cancer/brc_grading/checkpoints/ml_attention"
+
+
 submit_job(
     job_name="brc-grading-train-mil-attention",
     image="cerit.io/rationai/base:2.0.6",
-    cpu=8,
-    memory="32Gi",
+    cpu=12,
+    memory="48Gi",
     gpu="A40",
     public=False,
     script=[
@@ -29,7 +37,12 @@ submit_job(
         "cd workdir",
         "uv sync --frozen",
         "export PYTHONUNBUFFERED=1",
-        "uv run -m ml.train +experiment=ml/mil_attention",
+        # Resume in place if a previous attempt left a checkpoint behind.
+        (
+            f'last="{CKPT_DIR}/last.ckpt"; resume=""; '
+            'if [ -f "$last" ]; then resume="checkpoint=$last"; echo "Resuming from $last"; fi'
+        ),
+        "uv run -m ml.train +experiment=ml/mil_attention $resume",
     ],
     storage=[storage.secure.PROJECTS],
 )
