@@ -122,9 +122,11 @@ def main() -> None:
         script=[
             # GIT_TERMINAL_PROMPT=0 so a node without GitHub egress fails at once instead
             # of blocking on a username prompt; retry because the pod can land anywhere.
-            "for i in 1 2 3; do GIT_TERMINAL_PROMPT=0 git clone "
-            "https://github.com/RationAI/breast-cancer-grading.git workdir && break; "
-            "echo clone_attempt_$i_failed; sleep 15; done",
+            (
+                "for i in 1 2 3; do GIT_TERMINAL_PROMPT=0 git clone "
+                "https://github.com/RationAI/breast-cancer-grading.git workdir "
+                "&& break; echo clone_attempt_$i_failed; sleep 15; done"
+            ),
             "cd workdir",
             # Fail loudly: without this the pod trains nothing, sleeps, and exits 0 with a
             # green job status (git's credential failure looked like a success downstream).
