@@ -130,8 +130,13 @@ for spec in \
 done
 ```
 
-32 Gi rather than 24 Gi because whole bags put ~4× the tiles in flight: a prefetched batch of 8 bags
-at the 27k-tile maximum is 8 × 27k × 2560 float32 ≈ 2.2 GB per worker.
+32 Gi, and **explicit per-split cache sizes** (`datamodule.train.cache_mb=768
+datamodule.val.cache_mb=512 datamodule.test.cache_mb=512`). The first submission of this batch used
+`TRAIN_EMB_CACHE_GB=2` and **two pods came back `OOMKilled` in under six minutes**: `EMB_CACHE_GB`
+sets `cache_mb` for *every* split, so 2 GB × 3 splits × 4 workers = 24 GiB of bag cache inside a
+32 Gi pod, before any batch is in flight. The explicit trio above is 7.0 GiB (verified with
+`--cfg job --resolve`), leaving room for a prefetched batch of 8 bags at the 27k-tile maximum
+(8 × 27k × 2560 float16 ≈ 1.1 GB per worker, × 4 workers × prefetch 2).
 
 | pair | isolates |
 |---|---|
@@ -151,6 +156,10 @@ prediction dumps make that possible, the script is not written.
 - **Bag cache memory = `cache_mb` × 3 splits × `num_workers`.** 8 workers × (3072+1024+1024) MB
   ≈ 41 GB blew a 48 Gi pod at epoch ~4; 4 workers × (768+512+512) MB ≈ 7 GB fits a 24 Gi pod.
   This, not the model, decides the pod size (VRAM is only 1.9–3.5 GiB).
+- **`EMB_CACHE_GB` (= `TRAIN_EMB_CACHE_GB`) is not a total budget** — it becomes `cache_mb` for each
+  of the three splits, per worker. `EMB_CACHE_GB=2` with 4 workers is 24 GiB of cache, which OOMKilled
+  two 32 Gi pods on 2026-11-10. Pass the three `datamodule.*.cache_mb` keys explicitly instead, and
+  confirm with `--cfg job --resolve` before paying for a pod.
 - **A pod used to report `Succeeded` with training dead in its first minutes** — the script
   continues with `sleep 300; nvidia-smi; wait` after training to sample the GPU, so the pod's
   exit code came from `wait`. Training now records its code in `/tmp/train_rc` and the last line
