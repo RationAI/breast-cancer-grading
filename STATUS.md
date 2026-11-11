@@ -190,6 +190,33 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
 - Show the overlay as "where the grade head looked", **not** "where the tumour is": §10 measured
   tumour-vs-stroma contrast 0.48 (below chance). The caveat is written into the report YAML too.
 
+### Turning the masks on disk into a report (`scripts/xopat_report.py`)
+
+```bash
+REPORT_JOB_NAME=brc-grading-xopat-report5 REPORT_SCRIPT=xopat_report.py \
+  REPORT_ARGS='--regen --user jiribuchta' uv run --no-sync python scripts/run_report.py
+kubectl logs -n rationai-jobs-ns job/brc-grading-xopat-report5-jiri-buchta
+```
+
+- `--regen` rewrites `report_conf/reporter/attention_<split>.yaml` for the masks **actually on the PVC**
+  (cheap: bag index + `summary.csv`, no model), then runs `python -m report`. Output:
+  `reports/attention_<split>.html` on the PVC **and** a run in MLflow experiment `Breast Cancer Grading`.
+- The HTML is a gallery of xOpat deep-link URLs + thumbnails; nothing is re-tiled. xOpat opens the files
+  itself — `report.infer_mount_path` strips `/mnt/`, so it needs to see both `projects/...` (masks) and
+  `bioptic_tree/...` (WSIs). If a report shows masks but a grey slide, that is the xOpat mount, not us.
+- `report` 1.1.5 lives in `gitlab.ics.muni.cz/.../pipeline/report.git` over **SSH**, which pods have no key
+  for, so the copy Tile-Morph had installed is vendored at `vendor/report` on the PVC (207 KB, MIT license
+  file included) and put on `PYTHONPATH`. It needs `orjson` (installed at runtime from nexus);
+  `hydra-core`, `jinja2`, `mlflow`, `polars` are already in the lock.
+- `MLFlowReportStorer` does `get_experiment_by_name(name).experiment_id`, so it **crashes if the experiment
+  does not exist**. The YAML points at `Breast Cancer Grading` (id 107, ours) — it said `Breast Cancer`
+  (id 61, not ours) when ported from Tile-Morph.
+- Which Hydra flag feeds an external `reporter/` dir is ambiguous (`--config-dir` replaces the app's
+  primary config, which `report_conf` does not contain), so the script **probes both** `--config-dir` and
+  `++hydra.searchpath=[…]` with `--cfg job --resolve` and uses the one that composes.
+- Not runnable from the notebook: it has a **4 GiB** cgroup limit and `python -m report` imports mlflow and
+  gets OOM-killed (exit 137) before printing anything.
+
 `TRAIN_EMB_CACHE_GB` is refused when it exceeds half the pod; prefer the explicit `cache_mb` trio. Report
 jobs: `REPORT_JOB_NAME=… REPORT_SCRIPT=ensemble_variants.py REPORT_VARIANTS=… REPORT_ARGS='--oof
 --train-counts 575,67,247,286' uv run --no-sync python scripts/run_report.py` (delete a same-named job
