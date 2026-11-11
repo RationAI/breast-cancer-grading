@@ -441,9 +441,24 @@ moves ~6 points across seeds. Most of the overnight arms could not have answered
   decision rule leave-one-fold-out, so the pooled number includes fitting the rule. It also averages
   the folds' test dumps into one k-fold model, with λ from the out-of-fold rows only. Pass
   `--train-counts` — a fold trains on four fifths, so its prior is not the full-cohort one.
-- Cost of the ruler: one training job per fold. **5 folds × 1 recipe = 5 jobs; 5 folds × {candidate,
-  control} = 10 jobs and a paired comparison.** Without the control the fold number is an absolute
-  estimate ±1 point, which still cannot say whether the candidate beats today's defaults.
+- Cost of the ruler, measured rather than assumed (2026-11-11). A whole-bag MIL run takes **4-5 GB of
+  the 48 GB card at 0-12 % utilization** — parquet-decode bound, not GPU bound — so the packing limit is
+  host RAM and CPU, not VRAM. **3 concurrent whole-bag runs in a 24 Gi pod were OOMKilled in epoch 0 at
+  7 min**: the hog is batches in flight (`batch_size` × bags of 61-336 MB fp32 × workers), not the bag
+  cache. **2 runs per pod at `datamodule.batch_size=4`, `num_workers=2`, 32 Gi** run at ~4 min/epoch
+  (294 steps over 1175 slides). One job per fold carrying both recipes is therefore the cheap shape:
+  **5 jobs for 10 trainings**, paired inside each pod, instead of 10 jobs.
+- Running now: jobs `brc-grading-train-mil-attention-kf{0..4}`, each packing `<fold>-ctl` (today's
+  defaults) and `<fold>-cand` (`ml.head.dropout=0.2`) on the same fold CSV. The candidate is dropout
+  only — `configs/data/grading.yaml` documents that sub-sampling to 2048 tiles truncates the three
+  tumour grades to ~20 % of their tiles while leaving grade 0 nearly intact, so bag size itself leaks the
+  label (log tile count alone scores 0.579 accuracy / 0.509 QWK on test). The 2048-tile idea is dead on
+  that evidence, not on the −1.9 measured by the one arm that actually got the knob.
+- Reading it when they finish: `REPORT_JOB_NAME=brc-grading-oof REPORT_SCRIPT=ensemble_variants.py
+  REPORT_VARIANTS=kf0-ctl,kf1-ctl,kf2-ctl,kf3-ctl,kf4-ctl REPORT_ARGS="--oof --train-counts
+  575,67,247,285" uv run --no-sync python scripts/run_report.py`, and the same with `-cand`. The
+  `--train-counts` are fold sizes (295 per fold), not 1175. A real effect is a few points, not one: a
+  fold is 295 slides, and even the whole 1469-slide pool only reaches ±1.
 
 ## Not known
 
