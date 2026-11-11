@@ -23,9 +23,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+
+# Jobs run this as `python scripts/make_kfold_labels.py`, which puts scripts/ on sys.path and
+# not the repo root, so `ml` would be unimportable without this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ml.data.datasets.grading import GRADE_COLUMN, SLIDE_COLUMN, SPLIT_COLUMN
 
