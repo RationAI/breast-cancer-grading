@@ -550,3 +550,48 @@ Reproduce: `REPORT_JOB_NAME=brc-grading-oof-final REPORT_SCRIPT=ensemble_variant
 REPORT_VARIANTS=kf0-ctl,...,kf4-cand REPORT_ARGS='--oof --train-counts 575,67,247,286'
 uv run --no-sync python scripts/run_report.py`. The prior must come from the fold CSVs
 (`<project>/kfold/labels-kf{K}.csv` → 575,67,247,286 ±1 slide per fold), not the shipped 1175.
+
+## Which way the mistakes point (2026-11-11, job `brc-grading-trade`)
+
+Balanced accuracy cannot see the *direction* of an error. Reading it off the 1469-slide
+out-of-fold pool (`cand` = attention pooling, dropout 0.2, whole bags), confusion rows = the
+pathologist, cols = the model:
+
+```
+no rule                                   + rule (lambda ~0.9, fitted out-of-fold)
+      p0    p1    p2    p3                      p0    p1    p2    p3
+t0    699     3    13     4               t0    690     9    13     7
+t1      3    46    33     2               t1      3    60    19     2
+t2      7    37   212    53               t2      4    65   191    49
+t3      5     3    53   296               t3      5     8    52   292
+```
+
+- **Class 2 is the sink.** It is the only row that loses to *both* neighbours (37 up, 53 down) and
+  it is where class 1's 33 errors land. Class 0 is essentially never confused with anything
+  (20 errors in 719 slides), so "0.76 balanced accuracy" is really "near-perfect at separating
+  class 0, and a coin-flip-ish 1/2/3 boundary inside the tumour grades".
+- **The rule is a 1↔2 boundary move and nothing else**: class 1 goes 46 → 60 correct, class 2 goes
+  212 → 191. 65 class-2 slides get read as class 1.
+- **Direction, out-of-fold, `cand`**: no rule = exact 85.3 %, undercall 7.4 % (108), overcall
+  7.4 % (108) — symmetric. With the shipped rule = exact 83.9 %, **undercall 9.4 % (141)**,
+  overcall 6.3 % (101). On the 266 test slides the shipped artifact undercalls **34 of 266
+  (12.8 %)** and overcalls 10 (3.8 %); undercalls concentrate on classes 2 and 3 (18/58, 16/63).
+- **Lambda ladder** (out-of-fold rows, shown not chosen): λ=0 → bal 0.759, κ 0.924, under 108 /
+  over 108. λ=1.0 → 0.774, κ 0.912, under 141 / over 101. λ=1.5 → 0.774, κ 0.899, under 163 /
+  over 110. λ=2.0 → 0.753, under 202 / over 126. Balanced accuracy peaks at λ≈1-1.5 and *then
+  falls while undercalls keep climbing*, so the metric cannot police this choice.
+
+**Open decision, and it belongs to the pathologist, not to us:** if reporting a slide one grade
+too low is the dangerous error, the shipped λ≈0.9 rule triples it (10 → 34 on test) in exchange
+for class-1 recall 0.55 → 0.86, and **λ = 0 is the symmetric, safer artifact** at 1.9 points less
+balanced accuracy and *better* κ (0.924 vs 0.913). Asking for a cost per (true, predicted) pair
+turns this into arithmetic; guessing it is how we got the retracted +3.
+
+## Frozen artifact (2026-11-11)
+
+`/mnt/projects/breast_cancer/brc_grading/artifacts/foldavg-20261111-1718/` — the five `cand` fold
+`best.ckpt` files, their fold label CSVs and `manifest.json` (sha256, size, source path, git sha,
+recipe text). Built by `scripts/freeze_artifact.py`, which refuses to overwrite a directory that
+already has a manifest. Scoring a new cohort needs no new code: run `ml.train` per checkpoint with
+`checkpoint=... dataset.paths.labels=<cohort csv> eval.split=test`, then average the per-slide
+softmaxes — the same averaging `scripts/ensemble_variants.py` does across folds.
