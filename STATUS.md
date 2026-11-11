@@ -392,11 +392,64 @@ recipe, not into a note, and the retired arms stay listed here so nobody pays fo
   `pythonpath` it fails louder: `ModuleNotFoundError: ml / preprocessing`. Left as it is on purpose;
   add the ini options the day someone writes real test functions.
 
+## Post-hoc analysis, 2026-11-11: what survives being chosen on validation
+
+The overnight arms plus the older four were blended three ways, and the first finding is about the
+blending itself, not the model. Until today `ensemble_variants.py` fitted the decision rule on
+whatever validation epoch scored best, while the test frame comes from `best.ckpt` — a *different*
+epoch — so the rule was fitted on one model and applied to another's output, and validation numbers
+were flattered by cherry-picking an epoch. `best.ckpt`'s filename carries no epoch (`filename: best`)
+so it is read out of the checkpoint now; the val numbers dropped 2–4 points across the board. On the
+19-epoch run the tested checkpoint is epoch 17 of 18, which is why the first ensemble job found
+"no dumps": it looked for `valid_epoch18`.
+
+Chosen on validation, evaluated on test once (`brc-grading-ens-greedy`, 12 members):
+
+| recipe (all selection on val only) | val | test bal. | AUROC | kappa | recalls |
+|---|---|---|---|---|---|
+| greedy blend = `acc_s456` + 2×`acc_s123`, λ=0.2 | 0.8451 | **0.7896** | 0.9468 | 0.9005 | 0.98/0.86/0.59/0.73 |
+| all 12 averaged, λ=0.5 | 0.8244 | 0.7873 | **0.9525** | 0.8896 | 0.98/0.86/0.57/0.75 |
+| best single on val (`t2048_acc_s456`) + bias/temperature | 0.8244 | 0.7849 | 0.9465 | 0.9037 | 0.98/0.86/0.55/0.75 |
+
+- **Yesterday's 0.8002 was selection luck.** Picking the eight-member set by eye after reading test
+  gave 0.8002; the same procedure with the member set chosen on validation gives **0.7896**, and the
+  zero-choice version (average everything, λ from val) gives 0.7873. The honest post-hoc gain over
+  the best single run (0.7743) is **+1.3 points**, not +2.6.
+- **Per-class thresholds (idea #2) did nothing.** Fitting a temperature + four class offsets — the
+  general form the scalar prior rule is a special case of — gave 0.7896, identical to the scalar λ,
+  and made the 12-member blend *worse* (0.7782 vs 0.7873). Five parameters on 261 validation slides
+  (16 of them grade 1) overfits exactly as feared. Stop paying for it; the scalar rule is enough.
+- **`dr02_s456` (dropout 0.2, test 0.7956) is not chosen by validation at all** — its corrected val
+  is 0.7769, mid-pack. Either its test edge is luck or val and test disagree; a single seed cannot
+  tell those apart, which is the argument for the folds below.
+- Greedy picked the two `valid/accuracy`-monitored runs and nothing else, i.e. validation prefers a
+  different recipe than test does. With a ±2.6-point ruler that disagreement is unresolvable — it is
+  not a signal to act on, it is the noise floor.
+
+## k-fold: the ruler, built (nothing trained on it yet)
+
+The test set is 266 slides, so every number above carries ±2.6 points at 95%, while the same config
+moves ~6 points across seeds. Most of the overnight arms could not have answered their own question.
+
+- `scripts/make_kfold_labels.py` writes stratified folds as ordinary labels CSVs, so nothing under
+  `ml/` changed; folds are stratified because grade 1 has 68 training slides and an unstratified fold
+  can come out with none. `tests/test_kfold_labels.py` checks the folds are disjoint, cover the pool,
+  leave `test` alone, and load through `GradingDataset`.
+- Written on the share by job `brc-grading-kfold`: `/mnt/projects/breast_cancer/brc_grading/kfold/labels-kf{0..4}.csv`,
+  each train 1174–1178 / val 291–295 / test 266, per-fold train counts ≈ 575/67/247/285.
+- `ensemble_variants.py --oof` concatenates the folds' held-out fifths (~1469 slides) and fits the
+  decision rule leave-one-fold-out, so the pooled number includes fitting the rule. It also averages
+  the folds' test dumps into one k-fold model, with λ from the out-of-fold rows only. Pass
+  `--train-counts` — a fold trains on four fifths, so its prior is not the full-cohort one.
+- Cost of the ruler: one training job per fold. **5 folds × 1 recipe = 5 jobs; 5 folds × {candidate,
+  control} = 10 jobs and a paired comparison.** Without the control the fold number is an absolute
+  estimate ±1 point, which still cannot say whether the candidate beats today's defaults.
+
 ## Not known
 
-- Whether an ensemble of seeds beats the best single run here — the dumps exist, the script exists
-  (`scripts/ensemble_variants.py`, self-test passing) and has now been fixed; it has still produced
-  **no number**, because the first run died on the epoch pairing above.
+- Whether an ensemble of seeds beats the best single run — it does, by about +1.3 points on test
+  when the members are chosen on validation (`brc-grading-ens-greedy`), which is less than the ±6-point
+  seed spread, so it is worth having and not worth believing until the folds say otherwise.
 - Whether 2048 tiles is the right budget (only 2048 vs "all" have been compared; 1024 and 4096 untested),
   or whether attention weights attend to anything morphologically meaningful (no attention-map
   inspection, no slide-level visualisation).
