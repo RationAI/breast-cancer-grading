@@ -108,11 +108,12 @@ def main() -> None:
     )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--out", default="")
     parser.add_argument(
         "--out-dir",
         default="",
-        help="Write every fold here, from one seed, so the folds cannot drift apart between jobs.",
+        help="Where to write labels-kf0..N.csv, all from one seed so the folds cannot drift "
+        "apart between jobs. Defaults to a kfold/ directory beside the labels CSV, which is "
+        "where the training jobs can read them from.",
     )
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
@@ -120,13 +121,11 @@ def main() -> None:
         self_check()
         return
     labels = pd.read_csv(args.labels)
+    out_dir = args.out_dir or os.path.join(os.path.dirname(args.labels) or ".", "kfold")
+    os.makedirs(out_dir, exist_ok=True)
     for fold in range(args.folds):
         folded = make_fold(labels, fold, args.folds, args.seed)
-        out = (
-            os.path.join(args.out_dir, f"labels-kf{fold}.csv")
-            if args.out_dir
-            else (args.out or f"labels-kf{fold}.csv")
-        )
+        out = os.path.join(out_dir, f"labels-kf{fold}.csv")
         folded.to_csv(out, index=False)
         train = folded.loc[folded[SPLIT_COLUMN] == "train"]
         print(
