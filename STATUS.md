@@ -429,7 +429,7 @@ Chosen on validation, evaluated on test once (`brc-grading-ens-greedy`, 12 membe
   different recipe than test does. With a ±2.6-point ruler that disagreement is unresolvable — it is
   not a signal to act on, it is the noise floor.
 
-## k-fold: the ruler, built (nothing trained on it yet)
+## k-fold: the ruler, built
 
 The test set is 266 slides, so every number above carries ±2.6 points at 95%, while the same config
 moves ~6 points across seeds. Most of the overnight arms could not have answered their own question.
@@ -451,7 +451,7 @@ moves ~6 points across seeds. Most of the overnight arms could not have answered
   cache. **2 runs per pod at `datamodule.batch_size=4`, `num_workers=2`, 32 Gi** run at ~4 min/epoch
   (294 steps over 1175 slides). One job per fold carrying both recipes is therefore the cheap shape:
   **5 jobs for 10 trainings**, paired inside each pod, instead of 10 jobs.
-- Running now: jobs `brc-grading-train-mil-attention-kf{0..4}`, each packing `<fold>-ctl` (today's
+- Ran: jobs `brc-grading-train-mil-attention-kf{0..4}`, each packing `<fold>-ctl` (today's
   defaults) and `<fold>-cand` (`ml.head.dropout=0.2`) on the same fold CSV. The candidate is dropout
   only — `configs/data/grading.yaml` documents that sub-sampling to 2048 tiles truncates the three
   tumour grades to ~20 % of their tiles while leaving grade 0 nearly intact, so bag size itself leaks the
@@ -460,15 +460,17 @@ moves ~6 points across seeds. Most of the overnight arms could not have answered
 - Reading it when they finish: `REPORT_JOB_NAME=brc-grading-oof REPORT_SCRIPT=ensemble_variants.py
   REPORT_VARIANTS=kf0-ctl,kf1-ctl,kf2-ctl,kf3-ctl,kf4-ctl REPORT_ARGS="--oof --train-counts
   575,67,247,285" uv run --no-sync python scripts/run_report.py`, and the same with `-cand`. The
-  `--train-counts` are fold sizes (295 per fold), not 1175. A real effect is a few points, not one: a
+  `--train-counts` is the fold's **train** counts (1174-1178 slides, not the shipped 940); its val
+  split is 291-295 slides. A real effect is a few points, not one: a
   fold is 295 slides, and even the whole 1469-slide pool only reaches ±1.
 
 ## Not known
 
-- Whether an ensemble of seeds beats the best single run — it does, by about +1.3 points on test
-  when the members are chosen on validation (`brc-grading-ens-greedy`), which is less than the ±6-point
-  seed spread, so it is worth having and not worth believing until the folds say otherwise.
-- Whether 2048 tiles is the right budget (only 2048 vs "all" have been compared; 1024 and 4096 untested),
+- ~~Whether an ensemble of seeds beats the best single run~~ **settled by the folds**: the 5-fold
+  average of one recipe scores 0.7959 on test against 0.7743 for the best single seed and 0.7896 for
+  the validation-chosen 12-run blend, and it needs no seed choice at all. Take the fold average.
+- Whether 2048 tiles is the right budget (only 2048 vs "all" have been compared; 1024 and 4096 untested,
+  and the 5-fold wave tested **neither** - `cand` was dropout only, no tile override in the job spec),
   or whether attention weights attend to anything morphologically meaningful (no attention-map
   inspection, no slide-level visualisation).
 - Calibration, and behaviour on external data (bc20-24 only, single scanner estate).
@@ -512,10 +514,12 @@ is fitted leave-one-fold-out; the 266 test slides were read once, at the end.
 | recipe | OOF argmax | OOF + rule | rule Δ | test 5-fold avg, no rule | test + rule | test AUROC | κ |
 |---|---|---|---|---|---|---|---|
 | `ctl` (defaults) | 0.7612 | 0.7593 | **−0.2** | 0.7566 | 0.7861 | 0.9470 | 0.895 |
-| `cand` (dropout 0.2, 2048 train tiles) | 0.7588 | **0.7775** | **+1.9** | 0.7449 | **0.7959** | 0.9528 | 0.904 |
+| `cand` (dropout 0.2 — **nothing else**, no tile override in the job spec) | 0.7588 | **0.7775** | **+1.9** | 0.7449 | **0.7959** | 0.9528 | 0.904 |
 
 **Paired on the same 1469 out-of-fold slides: cand 0.8393 vs ctl 0.8230 accuracy, 62/38
-discordant, McNemar p = 0.021.** dropout 0.2 + 2048 train tiles is a small but real +1.6-point win.
+discordant, McNemar p = 0.021.** **`ml.head.dropout=0.2` is a small but real +1.6-point win** - and
+it is the whole candidate: the job spec carries no `max_tiles`/tile override, so this wave says
+nothing about tile budgets (the first draft of this section said "2048 train tiles", which is wrong).
 The 4-fold interim said +0.8 OOF and −1.2 test — a sign flip, i.e. exactly the noise the pairing was
 built to remove. Fold-to-fold spread is 0.044 (ctl) / 0.055 (cand): larger than the whole effect, so
 no ±2-point claim from a single split has ever meant anything in this project.
@@ -529,6 +533,11 @@ no ±2-point claim from a single split has ever meant anything in this project.
    along the grade 1/2 boundary and adds no information (AUROC 0.9528 → 0.9478). Whether that trade
    is the right one is clinical, not a metric question. Not yet paired-tested: the paired block
    compares recipes, not decision rules.
+3. **`patience=10` spends about half the GPU time on nothing.** Measured off the checkpoints: best
+   epoch was 0–5 in all ten runs (3,0,0,5,5,4,2,2,2,4), and EarlyStopping then waited out 10 more, so the runs ended
+   at 15–28 epochs. `patience=5` cannot change which checkpoint wins (`best.ckpt` is already saved)
+   and would cut ~40 % of the epoch count. Epoch time itself ranged 4.8–9.5 min across the five pods
+   on the same work, so these runs wait on the NAS, not on the A40.
 
 Reproduce: `REPORT_JOB_NAME=brc-grading-oof-final REPORT_SCRIPT=ensemble_variants.py
 REPORT_VARIANTS=kf0-ctl,...,kf4-cand REPORT_ARGS='--oof --train-counts 575,67,247,286'
