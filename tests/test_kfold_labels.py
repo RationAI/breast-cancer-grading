@@ -190,6 +190,7 @@ assert f"pooled out-of-fold over {FOLDS_FOR_DUMP} folds" in report, report
 assert f"{FOLDS_FOR_DUMP}-fold average on test" in report, report
 assert "no rule" in report and "+ rule" in report, report
 assert "confusion" in report and "undercalled per class" in report, "the error trade must print"
+assert "accuracy-fitted boundary" in report, "a learned boundary must be tested against none"
 assert "escalation ladder" in report, "the never-miss operating point must be priced"
 assert "rule pairing" in report, "the lambda decision needs its paired test"
 assert "lambda ladder" in report, "the rule's trade must be shown, not only fitted"

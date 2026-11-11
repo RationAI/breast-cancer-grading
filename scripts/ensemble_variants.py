@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from report_variants import NUM_CLASSES, metrics_from_logits
 from scipy.stats import binomtest
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score
 
 
 # Training-split slide counts (bc20-24 ``labels.csv``), the prior the argmax learned.
@@ -205,6 +205,7 @@ def fit_rescoring(
     labels: np.ndarray,
     sweeps: int = 3,
     reg: float = 0.02,
+    objective: str = "balanced",
 ) -> tuple[float, np.ndarray, float]:
     """Fit one temperature and a four-value class offset on ``labels``.
 
@@ -212,14 +213,21 @@ def fit_rescoring(
     rule applies, and that rule is the special case ``bias = -lambda * log(prior)``. Five free
     parameters on 261 slides is a real overfitting risk, so the objective carries a ridge
     penalty on the offset and the caller prints the val -> test drop next to the number.
+
+    ``objective="accuracy"`` fits the same five numbers to the metric the confusion matrix is
+    counted in: a boundary can only gain accuracy if the model is mis-scaled per class, and this
+    is the version that would find it.
     """
     temperature, bias = 1.0, np.zeros(NUM_CLASSES)
     classes = np.arange(NUM_CLASSES)
+    metric = (
+        balanced_accuracy_score
+        if objective == "balanced"
+        else lambda y, p: accuracy_score(y, p)
+    )
 
     def score(temperature: float, bias: np.ndarray) -> float:
-        predicted = balanced_accuracy_score(
-            labels, rescored(probs, temperature, bias).argmax(1)
-        )
+        predicted = metric(labels, rescored(probs, temperature, bias).argmax(1))
         return predicted - reg * float(np.dot(bias, bias))
 
     for _ in range(sweeps):
@@ -231,9 +239,7 @@ def fit_rescoring(
             bias = max(candidates, key=lambda candidate: score(temperature, candidate))
         temperatures = [float(t) for t in np.linspace(0.5, 2.5, 11)]
         temperature = max(temperatures, key=lambda t: score(t, bias))
-    fitted = balanced_accuracy_score(
-        labels, rescored(probs, temperature, bias).argmax(1)
-    )
+    fitted = metric(labels, rescored(probs, temperature, bias).argmax(1))
     return temperature, bias, float(fitted)
 
 
@@ -507,6 +513,8 @@ def pooled_oof(
         )
 
         per_fold = []
+        per_fold_acc = []
+        acc_boundary = np.zeros_like(scores)
         for fold in np.unique(folds):
             trained, held = folds != fold, folds == fold
             temperature, bias, _ = fit_rescoring(scores[trained], labels[trained])
@@ -515,10 +523,31 @@ def pooled_oof(
                     labels[held], rescored(scores[held], temperature, bias).argmax(1)
                 )
             )
+            # The boundary fitted to *accuracy*, which is the metric a pathologist's confusion
+            # matrix is counted in. If the model is mis-scaled per class this finds it; if the
+            # ranking is all there is, it buys nothing and the paired test below says so.
+            t_acc, b_acc, _ = fit_rescoring(
+                scores[trained], labels[trained], objective="accuracy"
+            )
+            acc_boundary[held] = rescored(scores[held], t_acc, b_acc)
+            per_fold_acc.append(
+                float(accuracy_score(labels[held], acc_boundary[held].argmax(1)))
+            )
         print(
             f"{tag}pooled out-of-fold + bias/temp fitted leave-one-fold-out: "
             f"{' '.join(f'{s:.3f}' for s in per_fold)} "
             f"(spread {max(per_fold) - min(per_fold):.3f})"
+        )
+        print(
+            f"{tag}boundary fitted to accuracy, leave-one-fold-out: "
+            f"{' '.join(f'{s:.3f}' for s in per_fold_acc)} "
+            f"(mean {sum(per_fold_acc) / len(per_fold_acc):.4f} vs {accuracy_score(labels, scores.argmax(1)):.4f} unfitted)"
+        )
+        rule_pairing(
+            f"{tag}accuracy-fitted boundary pairing vs no boundary, leave-one-fold-out",
+            scores,
+            acc_boundary,
+            labels,
         )
 
         # Every fold scores the same test slides, so they also average into one k-fold model. Its
