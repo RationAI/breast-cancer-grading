@@ -211,9 +211,13 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-xopat-report5-jiri-buchta
 - `MLFlowReportStorer` does `get_experiment_by_name(name).experiment_id`, so it **crashes if the experiment
   does not exist**. The YAML points at `Breast Cancer Grading` (id 107, ours) — it said `Breast Cancer`
   (id 61, not ours) when ported from Tile-Morph.
-- Which Hydra flag feeds an external `reporter/` dir is ambiguous (`--config-dir` replaces the app's
-  primary config, which `report_conf` does not contain), so the script **probes both** `--config-dir` and
-  `++hydra.searchpath=[…]` with `--cfg job --resolve` and uses the one that composes.
+- The invocation is `python -m report --config-dir report_conf +reporter=<name> user=<you>`. The `+` is
+  required and was found by dry run, not guessed: upstream `default.yaml` keeps `reporter` a plain node, so a
+  bare `reporter=name` fails with *"Could not override 'reporter'. No match in the defaults list"* (Tile-Morph's
+  README documents the bare form — it cannot work). `--config-dir` only **adds** a group dir; the primary
+  config and the `mlflow`/`hydra` groups still come from the installed package, so `report_conf` needs
+  nothing but `reporter/*.yaml`. The script probes `--config-dir` and `++hydra.searchpath=[…]` and prints
+  which one composed.
 - Not runnable from the notebook: it has a **4 GiB** cgroup limit and `python -m report` imports mlflow and
   gets OOM-killed (exit 137) before printing anything.
 
