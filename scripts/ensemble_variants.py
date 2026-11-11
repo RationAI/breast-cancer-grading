@@ -71,6 +71,27 @@ def dump_dir(checkpoint_root: str, variant: str) -> str:
     )
 
 
+def tested_epoch(predictions_dir: str) -> int | None:
+    """Epoch of the checkpoint the test dump came from, read out of ``best.ckpt``.
+
+    ``filename: best`` in ``configs/trainer/default.yaml`` means the filename carries no epoch,
+    and the test dump's own number is one past the last validation dump because Lightning
+    increments ``current_epoch`` before testing - so the epoch has to come from the checkpoint.
+    The head is a few thousand parameters, so loading it is a millisecond-scale read.
+    """
+    try:
+        import torch
+
+        checkpoint = torch.load(
+            os.path.join(os.path.dirname(predictions_dir), "best.ckpt"),
+            map_location="cpu",
+            weights_only=False,
+        )
+        return int(checkpoint["epoch"])
+    except Exception:
+        return None
+
+
 def load_variant(
     checkpoint_root: str, variant: str
 ) -> tuple[str, pd.DataFrame, pd.DataFrame] | None:
@@ -79,9 +100,10 @@ def load_variant(
     The valid and test dumps are **not** numbered the same: Lightning bumps
     ``current_epoch`` before the final test, so a 19-epoch run leaves ``test_epoch18.csv``
     next to ``valid_epoch0..17.csv``, and pairing by equal number never matches (the first
-    ensemble job printed "no dumps" for variants the reporter had just listed). So the test
-    frame comes from the single ``test_epoch<N>.csv``, and the valid frame we fit the
-    decision rule on is whichever dumped epoch has the best validation balanced accuracy.
+    ensemble job printed "no dumps" for variants the reporter had just listed). The test frame
+    is the single ``test_epoch<N>.csv``; the valid frame the decision rule is fitted on is the
+    epoch the tested checkpoint was saved at, falling back to the last dumped epoch when the
+    checkpoint cannot be read.
     """
     directory = dump_dir(checkpoint_root, variant)
     tests = [
@@ -94,20 +116,14 @@ def load_variant(
     ]
     if not tests or not valids:
         return None
-    best, best_score = None, -1.0
-    for epoch in valids:
-        frame = pd.read_csv(os.path.join(directory, f"valid_epoch{epoch}.csv"))
-        logits = frame[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()
-        score = metrics_from_logits(frame["label"].to_numpy(), logits)[
-            "balanced_accuracy"
-        ]
-        if score > best_score:
-            best, best_score = frame, score
-    if best is None:
-        return None
+    # Prefer the epoch the tested checkpoint was saved at: fitting the decision rule on a
+    # different epoch's model than the one that produced the test frame would mispair them.
+    epoch = tested_epoch(directory)
+    if epoch not in valids:
+        epoch = max(valids)
+    frame = pd.read_csv(os.path.join(directory, f"valid_epoch{epoch}.csv"))
     test = pd.read_csv(os.path.join(directory, f"test_epoch{max(tests)}.csv"))
-    # Labelled for the report line: the valid epoch we fit on need not be the tested one.
-    return (f"test{max(tests)}/valid{best_score:.4f}", best, test)
+    return (f"test{max(tests)}/valid{epoch}", frame, test)
 
 
 def align(frames: list[pd.DataFrame]) -> list[pd.DataFrame]:
@@ -123,13 +139,112 @@ def probs_of(frame: pd.DataFrame) -> np.ndarray:
     return softmax(frame[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy())
 
 
+def blend(frames: list[np.ndarray]) -> np.ndarray:
+    return np.mean(np.stack(frames), axis=0)
+
+
+def best_lambda(
+    probs: np.ndarray, labels: np.ndarray, prior: np.ndarray
+) -> tuple[float, float]:
+    """``(lambda, balanced accuracy)`` of the best point on ``LAMBDA_GRID``."""
+    scored = [
+        (
+            balanced_accuracy_score(
+                labels, prior_corrected(probs, prior, lam).argmax(1)
+            ),
+            float(lam),
+        )
+        for lam in LAMBDA_GRID
+    ]
+    score, lam = max(scored)
+    return lam, score
+
+
+def greedy_select(
+    val_probs: list[np.ndarray],
+    labels: np.ndarray,
+    prior: np.ndarray,
+    rounds: int = 12,
+    min_gain: float = 1e-3,
+) -> tuple[list[int], list[float]]:
+    """Caruana ensemble selection with replacement, scored **on validation only**.
+
+    Replaces hand-picking member sets, which is what made the 2026-11-11 numbers partly
+    selection luck: each round adds the member whose inclusion raises validation balanced
+    accuracy most, at that blend's own best lambda, and stops when the gain falls under
+    ``min_gain``. Selecting on 261 slides (16 of them class 1) overfits a little by
+    construction - hence the printed validation curve and the single test evaluation.
+    """
+    chosen: list[int] = []
+    curve: list[float] = []
+    best_score = -1.0
+    for _ in range(rounds):
+        best: tuple[float, int] | None = None
+        for i in range(len(val_probs)):
+            _, score = best_lambda(
+                blend([val_probs[j] for j in [*chosen, i]]), labels, prior
+            )
+            if best is None or score > best[0]:
+                best = (score, i)
+        if best is None or best[0] <= best_score + min_gain:
+            break
+        best_score, index = best
+        chosen.append(index)
+        curve.append(best_score)
+    return chosen, curve
+
+
+def rescored(probs: np.ndarray, temperature: float, bias: np.ndarray) -> np.ndarray:
+    """Temperature-scaled log-probabilities plus a per-class offset (argmax scores)."""
+    return np.log(np.clip(probs, 1e-12, None)) * temperature + bias
+
+
+def fit_rescoring(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    sweeps: int = 3,
+    reg: float = 0.02,
+) -> tuple[float, np.ndarray, float]:
+    """Fit one temperature and a four-value class offset on ``labels``.
+
+    Balanced accuracy is maximised by per-class thresholds, not by the single scalar the prior
+    rule applies, and that rule is the special case ``bias = -lambda * log(prior)``. Five free
+    parameters on 261 slides is a real overfitting risk, so the objective carries a ridge
+    penalty on the offset and the caller prints the val -> test drop next to the number.
+    """
+    temperature, bias = 1.0, np.zeros(NUM_CLASSES)
+    classes = np.arange(NUM_CLASSES)
+
+    def score(temperature: float, bias: np.ndarray) -> float:
+        predicted = balanced_accuracy_score(
+            labels, rescored(probs, temperature, bias).argmax(1)
+        )
+        return predicted - reg * float(np.dot(bias, bias))
+
+    for _ in range(sweeps):
+        for k in range(NUM_CLASSES):
+            candidates = [
+                np.where(classes == k, bias[k] + delta, bias)
+                for delta in np.linspace(-0.6, 0.6, 13)
+            ]
+            bias = max(candidates, key=lambda candidate: score(temperature, candidate))
+        temperatures = [float(t) for t in np.linspace(0.5, 2.5, 11)]
+        temperature = max(temperatures, key=lambda t: score(t, bias))
+    fitted = balanced_accuracy_score(
+        labels, rescored(probs, temperature, bias).argmax(1)
+    )
+    return temperature, bias, float(fitted)
+
+
 def show(
     name: str,
     probs: np.ndarray,
     labels: np.ndarray,
     auroc_from: np.ndarray | None = None,
 ) -> dict[str, float]:
-    m = metrics_from_logits(labels, np.log(np.clip(probs, 1e-12, None)))
+    m = metrics_from_logits(
+        labels, probs
+    )  # argmax only: scores or probabilities both fine
     ranking = probs if auroc_from is None else auroc_from
     m["auroc"] = float(
         roc_auc_score(labels, ranking, average="macro", multi_class="ovr")
@@ -225,6 +340,42 @@ def main() -> None:
             auroc_from=probs,
         )
 
+    # Everything below chooses on validation and evaluates on test exactly once.
+    print("--- selected on validation, test used once")
+    chosen, curve = greedy_select(val_probs, labels_v, prior)
+    print(
+        f"greedy val curve: {' '.join(f'{s:.4f}' for s in curve)}\n"
+        f"members: {[loaded[i][0] for i in chosen]}"
+    )
+    sel_v = blend([val_probs[i] for i in chosen])
+    sel_t = blend([test_probs[i] for i in chosen])
+
+    best_val = int(np.argmax([best_lambda(p, labels_v, prior)[1] for p in val_probs]))
+    for name, probs_v, probs_t in (
+        (f"selected blend of {len(chosen)}", sel_v, sel_t),
+        (f"ensemble of {len(loaded)}", ens_val, ens_test),
+        (
+            f"best single on val ({loaded[best_val][0]})",
+            val_probs[best_val],
+            test_probs[best_val],
+        ),
+    ):
+        lam, val_score = best_lambda(probs_v, labels_v, prior)
+        show(
+            f"{name} + prior rule (val {val_score:.4f}, lambda={lam:.1f})",
+            prior_corrected(probs_t, prior, lam),
+            labels_t,
+            auroc_from=probs_t,
+        )
+        temperature, bias, val_score = fit_rescoring(probs_v, labels_v)
+        show(
+            f"{name} + bias/temp (val {val_score:.4f})",
+            rescored(probs_t, temperature, bias),
+            labels_t,
+            auroc_from=probs_t,
+        )
+        print(f"    temperature={temperature:.2f} bias={np.round(bias, 2).tolist()}")
+
 
 def self_test() -> None:
     """The maths, checked without a cluster."""
@@ -270,8 +421,29 @@ def self_test() -> None:
     out = align([a, b])
     assert out[0]["slide_id"].tolist() == ["b", "c"], out[0]
     assert out[1]["label"].tolist() == [1, 2], out[1]
+
+    # Greedy selection picks the informative member first and a useless one adds nothing.
+    picked_truth = rng.integers(0, NUM_CLASSES, size=400)
+    good = softmax(
+        np.eye(NUM_CLASSES)[picked_truth] * 6.0 + rng.normal(0, 0.2, (400, 4))
+    )
+    noise = softmax(rng.normal(size=(400, NUM_CLASSES)))
+    chosen, curve = greedy_select([noise, good], picked_truth, prior)
+    assert chosen[0] == 1, f"picked {chosen[0]} before the informative member"
+    assert curve[-1] > balanced_accuracy_score(picked_truth, noise.argmax(1))
+
+    # A decision rule skewed by the training prior is undone by fitting on labels.
+    ref_truth = rng.integers(0, NUM_CLASSES, size=2000)
+    ref_margin = rng.normal(0.0, 1.0, size=(2000, NUM_CLASSES))
+    ref_margin[np.arange(2000), ref_truth] += 2.0
+    skewed = softmax(ref_margin + np.log(prior))
+    raw_bal = balanced_accuracy_score(ref_truth, skewed.argmax(1))
+    temperature, bias, fitted = fit_rescoring(skewed, ref_truth)
+    assert fitted > raw_bal, (raw_bal, fitted)
+    assert len(bias) == NUM_CLASSES and temperature > 0.0
     print(
-        f"self-test ok: prior correction {before:.3f} -> {after:.3f} balanced accuracy"
+        f"self-test ok: prior correction {before:.3f} -> {after:.3f}, "
+        f"rescoring {raw_bal:.3f} -> {fitted:.3f} balanced accuracy"
     )
 
 
