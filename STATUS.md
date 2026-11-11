@@ -666,3 +666,49 @@ artefact, now labelled as one in the output.
 Nothing was trained for this: one model, one frozen artifact, and an operating point that is a
 addition of `beta * class_index` in log space at inference. Decide β, and it can be written into the
 manifest when the winning arm is frozen.
+
+## Tile-budget wave, and whether a learned boundary is better (both answered)
+5 folds × {cap 1024, cap 4096} tiles per bag, dropout 0.2 in both arms, 1000-slide test split (266 test
+slides/fold). Paired per-fold McNemar on test, whole bags = the `cand` arm:
+
+| arm | OOF bal / AUROC / acc | test bal / AUROC | paired accuracy difference |
+|---|---|---|---|
+| whole bags (`cand`) | 0.759 / 0.952 / 0.853 | 0.745 / 0.953 | reference; **+1.63 pts over dropout-default (`ctl`), p=0.021** — dropout 0.2 replicated on an independent split |
+| cap 1024 | 0.740 / 0.948 / 0.843 | 0.747 / 0.951 | **−1.57 vs whole bags (p=0.062)**, −0.07 vs `ctl` (p=1.0) |
+| cap 4096 | 0.726 / 0.946 / 0.830 | 0.737 / 0.952 | **−3.00 vs whole bags (p=0.0008)** |
+
+**Verdict: capping the bag buys nothing and can cost something.** Whole bags win; 1024 is statistically
+indistinguishable from whole bags while being ~6× cheaper per epoch (so it is the knob to pull if
+throughput ever matters, not if accuracy does); 4096 is clearly worse. The dose-response is non-monotone
+(4096 worse than 1024 and worse than no cap), which is a warning that these are not three points on a clean
+curve. Confounded knob: the cap applied to train AND val/test, while the shipped config deliberately keeps
+eval uncapped ("evaluation always sees the whole slide") — so this wave cannot separate "bag augmentation
+during training" from "truncated bags at evaluation". Run it train-only if the question ever matters again.
+
+**Does a learned boundary beat fixed thresholds?** The most learned threshold the setting allows — five
+parameters on the cumulative softmax, fitted to maximize **accuracy** on out-of-fold rows, evaluated
+leave-one-fold-out and paired slide by slide against using no boundary at all:
+
+| arm | accuracy, learned boundary | accuracy, plain argmax | McNemar |
+|---|---|---|---|
+| `cand` | 0.8530 | 0.8543 | 13/15, p=0.85 |
+| `ctl` | 0.8482 | 0.8462 | 21/18, p=0.75 |
+
+**No gain: +0.13 and −0.20 points, both noise.** With β, with λ and now with a boundary fitted for accuracy
+directly, the same result keeps holding: the ranking is where the information is, and the threshold step
+only relocates errors between adjacent grades. `--oof` now prints this test every time.
+
+Wall-clock: 89 min per pod for two concurrent runs, versus 3 h 33 m for the same shape on the previous split.
+Two causes, both real: patience 5 (now the committed default, `configs/trainer/default.yaml`) and the capped
+bags where capped. kf0-tf1024's best epoch was ~10 (vs 0–5 for whole bags) — capping delays the plateau, so
+patience 5 is now close to the minimum safe value, not generous.
+
+**Gap found while writing this up.** The flags used to submit these waves (`--recipes`, `--run-name`,
+`--overrides`, and the `dataset.max_tiles` → `datamodule.{train,val,test}.max_tiles` expansion) exist only in
+a scratch working copy that has since been deleted; they are not on `master`. The results themselves are
+valid — the pod spec is the record of what ran — but re-running a wave from `master` needs the flags
+re-added or the overrides typed out:
+
+    ml.head.dropout=0.2 datamodule.num_workers=2 datamodule.batch_size=4
+    datamodule.train.cache_mb=512 datamodule.val.cache_mb=256 datamodule.test.cache_mb=256
+    datamodule.train.max_tiles=<cap> datamodule.val.max_tiles=<cap> datamodule.test.max_tiles=<cap>
