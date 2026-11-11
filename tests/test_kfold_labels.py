@@ -190,6 +190,7 @@ assert f"pooled out-of-fold over {FOLDS_FOR_DUMP} folds" in report, report
 assert f"{FOLDS_FOR_DUMP}-fold average on test" in report, report
 assert "no rule" in report and "+ rule" in report, report
 assert "confusion" in report and "undercalled per class" in report, "the error trade must print"
+assert "escalation ladder" in report, "the never-miss operating point must be priced"
 assert "rule pairing" in report, "the lambda decision needs its paired test"
 assert "lambda ladder" in report, "the rule's trade must be shown, not only fitted"
 # Every fold's model predicts the held-out and test slides correctly here, so all five score
@@ -199,7 +200,7 @@ scores = [
     for line in report.splitlines()
     if "bal=" in line and not line.startswith(" ")  # the ladder indents its bal=
 ]
-assert len(scores) == 4 and all(s == 1.0 for s in scores), report  # pooled 2 + test 2
+assert len(scores) == 5 and all(s == 1.0 for s in scores), report  # pooled 2 + test 3
 spread = [line for line in report.splitlines() if "spread" in line]
 assert spread and spread[0].split("spread ")[1].rstrip(")").startswith("0.000"), spread
 

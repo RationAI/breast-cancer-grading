@@ -352,6 +352,64 @@ def rule_pairing(name: str, raw: np.ndarray, corrected: np.ndarray, labels: np.n
     )
 
 
+def escalate(scores: np.ndarray, beta: float) -> np.ndarray:
+    """Bias the argmax *upward*: ``log p_c + beta * c``, so ties break to the higher grade.
+
+    This is the knob for "never report a slide lower than it is". The prior correction is not that
+    knob - it shifts mass toward whichever class the training split was short of, and class 1 sits
+    *below* class 2, so a positive lambda pushes grade-4 slides down into grade 3.
+    """
+    ramp = np.arange(NUM_CLASSES, dtype=float)
+    return np.log(np.clip(scores, 1e-12, None)) + beta * ramp
+
+
+def sensitivity(pred: np.ndarray, labels: np.ndarray) -> tuple[float, int, int]:
+    """Detection of anything above the bottom class, plus the false alarms it costs.
+
+    ``label >= 1`` is "the pathologist saw something", so this is the miss rate a screening use
+    cares about; the third number is the price - bottom-class slides escalated.
+    """
+    tumour, called = labels >= 1, pred >= 1
+    caught = int((tumour & called).sum())
+    return (
+        caught / int(tumour.sum()) if tumour.any() else float("nan"),
+        int((tumour & ~called).sum()),
+        int((~tumour & called).sum()),
+    )
+
+
+def escalation_ladder(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    betas: tuple[float, ...] = (0.0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0),
+    target: float = 0.99,
+) -> float:
+    """Price list for escalating: what each bias strength buys in misses and costs in false alarms.
+
+    Chosen on these rows by the protocol below - the smallest beta that reaches ``target`` detection
+    of the non-bottom classes - so the pick does not depend on reading the test numbers. Returns the
+    chosen beta.
+    """
+    print(f"  escalation ladder: smallest beta reaching {target:.0%} detection of grades above c0")
+    chosen, rows = None, []
+    for beta in betas:
+        pred = escalate(scores, beta).argmax(1)
+        sens, missed, false = sensitivity(pred, labels)
+        m = metrics_from_logits(labels, np.eye(NUM_CLASSES)[pred])
+        rows.append((beta, sens, missed, false, m))
+        print(
+            f"    beta {beta:>4.2f} detect={sens:.4f} missed={missed:3d} false-alarms={false:3d} "
+            f"under={int((pred < labels).sum()):3d} over={int((pred > labels).sum()):3d} "
+            f"bal={m['balanced_accuracy']:.4f} kappa={m['quadratic_kappa']:.4f} recals "
+            f"{m['recall_c0']:.2f}/{m['recall_c1']:.2f}/{m['recall_c2']:.2f}/{m['recall_c3']:.2f}"
+        )
+        if chosen is None and sens >= target:
+            chosen = beta
+    chosen = betas[-1] if chosen is None else chosen
+    print(f"    chosen beta = {chosen}")
+    return float(chosen)
+
+
 def _fold_recipe(variant: str) -> tuple[str, str]:
     """``kf3-ctl`` is fold ``kf3`` of recipe ``ctl``.
 
@@ -434,6 +492,7 @@ def pooled_oof(
         print(f"{tag}error direction out-of-fold, no rule: {direction(scores.argmax(1), labels)}")
         print(f"{tag}error direction out-of-fold, + rule:   {direction(corrected.argmax(1), labels)}")
         lambda_ladder(scores, labels, prior)
+        beta = escalation_ladder(scores, labels)
         rule_pairing(
             f"{tag}rule pairing out-of-fold, lambda 0 vs fitted leave-one-fold-out",
             scores,
@@ -476,6 +535,18 @@ def pooled_oof(
             auroc_from=average,
         )
         print(f"{tag}error direction on test, + rule: {direction(shipped.argmax(1), labels_t)}")
+        escalated = escalate(average, beta).argmax(1)
+        show(
+            f"{tag}{len(tests)}-fold average on test, escalated beta={beta} (chosen out-of-fold)",
+            np.eye(NUM_CLASSES)[escalated],
+            labels_t,
+            auroc_from=average,
+        )
+        sens, missed, false = sensitivity(escalated, labels_t)
+        print(
+            f"{tag}escalated on test: detect={sens:.4f} missed={missed} false-alarms={false} "
+            f"{direction(escalated, labels_t)}"
+        )
         rule_pairing(
             f"{tag}rule pairing on test, lambda 0 vs lambda {lam:.1f} (fitted out-of-fold, "
             "reported once)",

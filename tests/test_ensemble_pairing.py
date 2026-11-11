@@ -131,3 +131,26 @@ assert "flips into undercall 1, out of undercall 0" in _line, _line
 assert "under calls 0 vs 1" in _line, _line
 
 print("ok: rule pairing counts discordant slides and the direction of each flip")
+
+# --- escalation: the knob that biases toward the higher grade, and its price ---
+_scores = np.tile(np.array([[0.55, 0.45, 0.0, 0.0]]), (3, 1))  # three slides, all scored 0.55 vs 0.45 between c0 and c1
+_labels = np.array([0, 1, 1])
+assert ensemble_variants.escalate(_scores, 0.0).argmax(1).tolist() == [0, 0, 0]
+assert ensemble_variants.escalate(_scores, 0.5).argmax(1).tolist() == [1, 1, 1]  # biased up
+assert all(
+    (ensemble_variants.escalate(_scores, b).argmax(1) >= 0).all() for b in (0.1, 1.0, 5.0)
+)  # monotone knob, never NaN
+_sens, _missed, _false = ensemble_variants.sensitivity(np.array([0, 1, 1]), _labels)
+assert (_sens, _missed, _false) == (1.0, 0, 0), (_sens, _missed, _false)
+_sens, _missed, _false = ensemble_variants.sensitivity(np.array([0, 0, 1]), _labels)
+assert (_sens, _missed, _false) == (0.5, 1, 0), (_sens, _missed, _false)
+_captured = io.StringIO()
+with contextlib.redirect_stdout(_captured):
+    _beta = ensemble_variants.escalation_ladder(
+        np.array([[0.55, 0.45, 0.0, 0.0]] * 3), _labels, betas=(0.0, 0.05, 0.5), target=0.99
+    )
+assert _beta == 0.5, (_beta, _captured.getvalue())
+assert "false-alarms=  0" in _captured.getvalue(), _captured.getvalue()
+assert "false-alarms=  1" in _captured.getvalue(), _captured.getvalue()  # the escalation price
+
+print("ok: escalate biases upward monotonically and the ladder picks the smallest beta that hits target")
