@@ -39,6 +39,13 @@ scores 0.579 raw accuracy / 0.391 balanced accuracy / 0.509 kappa on the test sp
 
 Classes 0–3 are B-RAD/Nottingham grades 2–5. **Only 15 % of slides are held out.**
 
+**The split is case-disjoint, measured rather than assumed** (`scripts/case_leakage.py`, job
+`brc-grading-leak`): 1735 slides carry **1734 distinct case prefixes** (the one duplicated case sits
+twice in `train`), and **0 of 266 test slides and 0 of 261 val slides share a case with train**. So
+the headline numbers are not inflated by two sections of one patient sitting on both sides — the
+usual way a slide-level grading score is fake. It cannot detect same-patient slides carrying
+different case prefixes, which the ID scheme would have to hide.
+
 ## All finished runs (test set, 266 slides), best-val-loss checkpoint
 
 `bal` = `test/accuracy` = balanced accuracy; recalls are c0/c1/c2/c3 against counts 131/14/58/63.
