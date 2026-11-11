@@ -227,7 +227,7 @@ def stage_report(args, summary, sel):
 # a pale slide is one where the grade head did not focus anywhere in particular.
 # Focus per slide (eff_tiles = 1/sum(w^2)) is in summary.csv next to the masks.
 # Caveat (REPORT.md 10): these weights are verified not-degenerate, but a
-tumour-vs-stroma contrast of 0.48 AUC means we cannot claim they mark tumour.
+# tumour-vs-stroma contrast of 0.48 AUC means we cannot claim they mark tumour.
 # Show them as "where the model looked", not "where the tumour is".
 #
 # Run:
