@@ -385,12 +385,15 @@ recipe, not into a note, and the retired arms stay listed here so nobody pays fo
   `model.predictions_dir`.
 - NAS throughput measured 565 MB/s aggregate — not the bottleneck; per-file parquet decode is (that is
   what the bag cache exists for, `e416621`).
-- **Tests here are import-time assert scripts, not pytest functions**: run each file directly
-  (`PYTHONPATH=. .venv/bin/python tests/test_x.py`) — all eight pass that way as of 2026-11-11.
-  `pytest -q tests` collects **zero items** even with `pythonpath`/`consider_namespace_packages` set
-  in `pyproject.toml` (tried, reverted), because the files contain no `test_*` functions. Without a
-  `pythonpath` it fails louder: `ModuleNotFoundError: ml / preprocessing`. Left as it is on purpose;
-  add the ini options the day someone writes real test functions.
+- **Tests here are import-time assert scripts, not pytest functions**: run `./tests/run_all.sh`, which
+  runs every file with `PYTHONPATH=.:scripts` and prints the line each one ends with (`tests/test_x.py`
+  on its own works too). `pytest -q tests` collects **zero items** even with `pythonpath`
+  set in `pyproject.toml` (tried, reverted), because the files contain no `test_*` functions — so
+  **"no tests ran" is not a pass, and a pass count from pytest has never described these checks**.
+  That is how `tests/test_kfold_labels.py` shipped for half a day with zero assertions in it: a heredoc
+  mishap replaced the fold checks with a helper, and every run of the suite reported nothing wrong.
+  `run_all.sh` exists so the next such hole cannot stay silent; a new test file is only proven once it
+  prints its own line there.
 
 ## Post-hoc analysis, 2026-11-11: what survives being chosen on validation
 
