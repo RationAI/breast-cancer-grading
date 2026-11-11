@@ -237,6 +237,6 @@ assert max(paired_scores) == 1.0 and min(paired_scores) < 0.6, paired_scores
 lines = [line for line in report.splitlines() if "McNemar" in line]
 assert len(lines) == 1 and "paired per-slide comparison on 12" in report, lines
 assert float(lines[0].split("p=")[1]) < 0.01, f"a hopeless recipe must not tie: {lines[0]}"
-assert "+" in lines[0].split("pts")[0], f"bad -> ctl must read as a gain: {lines[0]}"
+assert "bad by -" in lines[0], f"the sign must read as ctl winning: {lines[0]}"
 
 print("k-fold labels + pooled OOF test passed")

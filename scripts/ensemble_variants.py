@@ -382,8 +382,8 @@ def pooled_oof(
                 split = only_a + only_b
                 p = binomtest(max(only_a, only_b), split, 0.5).pvalue if split else 1.0
                 print(
-                    f"  {a} vs {b}: accuracy {table[a].mean():.4f} vs {table[b].mean():.4f} "
-                    f"({100 * (table[b].mean() - table[a].mean()):+.2f} pts), discordant "
+                    f"  {a} vs {b}: accuracy {table[a].mean():.4f} vs {table[b].mean():.4f}, "
+                    f"{a} by {100 * (table[a].mean() - table[b].mean()):+.2f} pts, discordant "
                     f"{only_a}/{only_b}, McNemar p={p:.4f}"
                 )
 
