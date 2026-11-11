@@ -30,6 +30,7 @@ import os
 import numpy as np
 import pandas as pd
 from report_variants import NUM_CLASSES, metrics_from_logits
+from scipy.stats import binomtest
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
 
@@ -257,6 +258,16 @@ def show(
     return m
 
 
+def _fold_recipe(variant: str) -> tuple[str, str]:
+    """``kf3-ctl`` is fold ``kf3`` of recipe ``ctl``.
+
+    A name with no recipe suffix (``kf3``) is a fold of one shared recipe: several bare fold names
+    in one call are seeds or repeats of the same model, and pooling them is the point.
+    """
+    fold, sep, recipe = variant.rpartition("-")
+    return (variant, "all") if not sep else (fold, recipe)
+
+
 def pooled_oof(
     loaded: list[tuple[str, str, pd.DataFrame, pd.DataFrame]], prior: np.ndarray
 ) -> None:
@@ -265,76 +276,116 @@ def pooled_oof(
     Each fold's validation split is the fifth its model never trained on, so concatenating the
     five validation frames is out-of-fold for the whole train+val pool. The decision rule is
     fitted the honest way - leave one fold out, fit on the rest, predict that fold - so the
-    number includes fitting the rule and still has a ~1-point ruler instead of ±2.6.
+    number includes fitting the rule and still has a ~1-point ruler instead of \u00b12.6.
+
+    Several recipes may be pooled in one call (``kf0-ctl,kf0-cand,...``). Each is scored on its
+    own pooled folds, then the recipes are compared slide by slide: only a per-slide difference
+    cancels the ~4-point fold-to-fold spread that swamps a 1-point recipe effect.
     """
+    logits = [f"logit_{c}" for c in range(NUM_CLASSES)]
     columns = [f"prob_{c}" for c in range(NUM_CLASSES)]
     rows = pd.concat(
         [
             valid[["slide_id", "label"]]
-            .assign(fold=variant)
-            .join(
-                pd.DataFrame(
-                    softmax(
-                        valid[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()
-                    ),
-                    columns=columns,
-                )
-            )
+            .assign(fold=_fold_recipe(variant)[0], recipe=_fold_recipe(variant)[1])
+            .join(pd.DataFrame(softmax(valid[logits].to_numpy()), columns=columns))
             for variant, _, valid, _ in loaded
         ],
         ignore_index=True,
     )
-    # Several recipes per fold average into one prediction per slide; a slide must not appear in
-    # two folds, which the fold generator guarantees and this would silently corrupt.
+    # Several models of one fold average into one prediction per slide; a slide must not appear
+    # in two folds, which the fold generator guarantees and this would silently corrupt.
     if rows.groupby("slide_id")["fold"].nunique().gt(1).any():
         raise ValueError(
             "a slide was held out by two folds - the label CSVs are not the same split"
         )
-    pooled = rows.groupby(["slide_id", "label", "fold"], as_index=False)[columns].mean()
-    scores = pooled[columns].to_numpy()
-    labels = pooled["label"].to_numpy()
-    print(f"pooled out-of-fold over {pooled['fold'].nunique()} folds")
-    show("pooled out-of-fold, no rule", scores, labels)
-
-    corrected = np.zeros_like(scores)
-    for fold in pooled["fold"].unique():
-        mask = (pooled["fold"] == fold).to_numpy()
-        lam, _ = best_lambda(scores[~mask], labels[~mask], prior)
-        corrected[mask] = prior_corrected(scores[mask], prior, lam)
-    show("pooled out-of-fold + rule (fitted leave-one-fold-out)", corrected, labels)
-
-    per_fold = []
-    for fold in pooled["fold"].unique():
-        mask = (pooled["fold"] == fold).to_numpy()
-        temperature, bias, _ = fit_rescoring(scores[~mask], labels[~mask])
-        per_fold.append(
-            balanced_accuracy_score(
-                labels[mask], rescored(scores[mask], temperature, bias).argmax(1)
-            )
-        )
+    # `recipe` is a group key so two recipes never average into each other; seeds of one recipe
+    # and one fold do, into a single prediction per slide.
+    pooled = rows.groupby(["slide_id", "label", "fold", "recipe"], as_index=False)[
+        columns
+    ].mean()
+    recipes = sorted(pooled["recipe"].unique())
     print(
-        f"pooled out-of-fold + bias/temp fitted leave-one-fold-out: "
-        f"{' '.join(f'{s:.3f}' for s in per_fold)} (spread {max(per_fold) - min(per_fold):.3f})"
+        f"pooled out-of-fold over {pooled['fold'].nunique()} folds"
+        + (f", recipes {', '.join(recipes)}" if len(recipes) > 1 else "")
     )
+    right: dict[str, pd.Series] = {}
+    for recipe in recipes:
+        part = pooled[pooled["recipe"] == recipe]
+        # With one recipe the label would be noise, so it only tags lines that compare recipes.
+        tag = f"[{recipe}] " if len(recipes) > 1 else ""
+        scores = part[columns].to_numpy()
+        labels = part["label"].to_numpy()
+        folds = part["fold"].to_numpy()
+        show(f"{tag}pooled out-of-fold, no rule", scores, labels)
 
-    # Every fold scores the same test slides, so they also average into one k-fold model. Its
-    # decision rule is fitted on the out-of-fold rows above, never on test.
-    tests = align([test for _, _, _, test in loaded])
-    if not tests or not len(tests[0]):
-        return
-    labels_t = tests[0]["label"].to_numpy()
-    average = np.mean(
-        [softmax(test[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()) for test in tests],
-        axis=0,
-    )
-    show(f"{len(tests)}-fold average on test, no rule", average, labels_t)
-    lam, _ = best_lambda(scores, labels, prior)
-    show(
-        f"{len(tests)}-fold average on test + rule (lambda={lam:.1f} fitted out-of-fold)",
-        prior_corrected(average, prior, lam),
-        labels_t,
-        auroc_from=average,
-    )
+        corrected = np.zeros_like(scores)
+        for fold in np.unique(folds):
+            trained = folds != fold
+            lam, _ = best_lambda(scores[trained], labels[trained], prior)
+            corrected[~trained] = prior_corrected(scores[~trained], prior, lam)
+        show(
+            f"{tag}pooled out-of-fold + rule (fitted leave-one-fold-out)",
+            corrected,
+            labels,
+        )
+        right[recipe] = pd.Series(
+            corrected.argmax(1) == labels, index=part["slide_id"].to_numpy()
+        )
+
+        per_fold = []
+        for fold in np.unique(folds):
+            trained, held = folds != fold, folds == fold
+            temperature, bias, _ = fit_rescoring(scores[trained], labels[trained])
+            per_fold.append(
+                balanced_accuracy_score(
+                    labels[held], rescored(scores[held], temperature, bias).argmax(1)
+                )
+            )
+        print(
+            f"{tag}pooled out-of-fold + bias/temp fitted leave-one-fold-out: "
+            f"{' '.join(f'{s:.3f}' for s in per_fold)} "
+            f"(spread {max(per_fold) - min(per_fold):.3f})"
+        )
+
+        # Every fold scores the same test slides, so they also average into one k-fold model. Its
+        # decision rule is fitted on the out-of-fold rows above, never on test.
+        tests = align([t for v, _, _, t in loaded if _fold_recipe(v)[1] == recipe])
+        if not tests or not len(tests[0]):
+            continue
+        labels_t = tests[0]["label"].to_numpy()
+        average = np.mean([softmax(t[logits].to_numpy()) for t in tests], axis=0)
+        show(
+            f"{tag}{len(tests)}-fold average on test, no rule", average, labels_t
+        )
+        lam, _ = best_lambda(scores, labels, prior)
+        show(
+            f"{tag}{len(tests)}-fold average on test + rule "
+            f"(lambda={lam:.1f} fitted out-of-fold)",
+            prior_corrected(average, prior, lam),
+            labels_t,
+            auroc_from=average,
+        )
+
+    if len(recipes) > 1:
+        # Same slides, same rule-fitting protocol, so the fold spread cancels: this is the only
+        # comparison able to see a 1-point recipe effect. Accuracy, not balanced accuracy.
+        table = pd.DataFrame({name: right[name] for name in recipes}).dropna()
+        print(
+            f"paired per-slide comparison on {len(table)} out-of-fold slides "
+            f"(accuracy, not balanced accuracy)"
+        )
+        for i, a in enumerate(recipes):
+            for b in recipes[i + 1 :]:
+                only_a = int((table[a] & ~table[b]).sum())
+                only_b = int((table[b] & ~table[a]).sum())
+                split = only_a + only_b
+                p = binomtest(max(only_a, only_b), split, 0.5).pvalue if split else 1.0
+                print(
+                    f"  {a} vs {b}: accuracy {table[a].mean():.4f} vs {table[b].mean():.4f} "
+                    f"({100 * (table[b].mean() - table[a].mean()):+.2f} pts), discordant "
+                    f"{only_a}/{only_b}, McNemar p={p:.4f}"
+                )
 
 
 def main() -> None:

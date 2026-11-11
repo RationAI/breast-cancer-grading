@@ -162,14 +162,19 @@ PRIOR = np.array([575, 67, 247, 285], dtype=float)
 PRIOR /= PRIOR.sum()
 
 
-def fold_loaded(fold: int, take: list[int]) -> tuple[str, str, pd.DataFrame, pd.DataFrame]:
+def fold_loaded(
+    fold: int,
+    take: list[int],
+    name: str | None = None,
+    correct: bool = True,
+) -> tuple[str, str, pd.DataFrame, pd.DataFrame]:
     held = [i for i in range(len(LABELS)) if i % FOLDS_FOR_DUMP == fold]
     held = [i for i in held if i in take] if take else held
     return (
-        f"kf{fold}",
+        name or f"kf{fold}",
         "test2/valid2",
-        frame([f"s{i:03d}" for i in held], [LABELS[i] for i in held], correct=True),
-        frame(TESTS, TEST_LABELS, correct=True),
+        frame([f"s{i:03d}" for i in held], [LABELS[i] for i in held], correct=correct),
+        frame(TESTS, TEST_LABELS, correct=correct),
     )
 
 
@@ -207,5 +212,31 @@ try:
 except ValueError as error:
     refused = "two folds" in str(error)
 assert refused, "overlapping folds must be refused"
+
+# --- two recipes pooled in one call: scored separately, then compared slide by slide -----
+
+# `kf3-ctl` naming, so the fold comes from the prefix and the recipe from the suffix. The second
+# recipe predicts grade 0 for everything: strictly worse, on exactly the same held-out slides.
+couples = [fold_loaded(f, [], f"kf{f}-ctl") for f in range(FOLDS_FOR_DUMP)] + [
+    fold_loaded(f, [], f"kf{f}-bad", correct=False) for f in range(FOLDS_FOR_DUMP)
+]
+printed = io.StringIO()
+with contextlib.redirect_stdout(printed):
+    ev.pooled_oof(couples, PRIOR)
+report = printed.getvalue()
+assert "recipes bad, ctl" in report, report
+# Averaging the two recipes would pull both to the middle; keeping them apart must leave one
+# perfect and the other at chance (4 classes, everything predicted as grade 0).
+paired_scores = [
+    float(line.split("bal=")[1].split()[0])
+    for line in report.splitlines()
+    if "pooled out-of-fold, no rule" in line
+]
+assert len(paired_scores) == 2, report
+assert max(paired_scores) == 1.0 and min(paired_scores) < 0.6, paired_scores
+lines = [line for line in report.splitlines() if "McNemar" in line]
+assert len(lines) == 1 and "paired per-slide comparison on 12" in report, lines
+assert float(lines[0].split("p=")[1]) < 0.01, f"a hopeless recipe must not tie: {lines[0]}"
+assert "+" in lines[0].split("pts")[0], f"bad -> ctl must read as a gain: {lines[0]}"
 
 print("k-fold labels + pooled OOF test passed")
