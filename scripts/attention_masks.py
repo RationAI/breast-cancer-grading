@@ -12,95 +12,140 @@ blocks are laid down on a level-1 raster and the raster is upscaled 2x with
 pixel replication, which is byte-identical to drawing at level 0 for a quarter
 of the memory (same trick as make_mask_tiff.py).
 
-Value encoding (repeated in the report YAML):
+Value encoding (repeated in the report YAML) -- one absolute scale for all
+slides, so a colour means the same thing on every slide:
     0     no tile here (background / QC-filtered)
-    1-255 log10(attention / equal share), rescaled per slide so that the
-          brightest tile on that slide is 255 and a tile with exactly an
-          equal share of the attention is 1. Reading: "how many times more
-          than an average tile did the model look here".
-    Per-slide rescaling is deliberate -- attention is a softmax over one slide,
-    so absolute weights are not comparable across slides. How FOCUSED a slide
-    was is reported separately as eff_tiles = 1/sum(w^2) in summary.csv.
+    1     the tile got exactly an equal share (1/N) of the slide's attention
+    128   10x an equal share
+    255   100x an equal share or more (saturated)
+i.e. value = decades of attention above an equal share. A slide where nothing
+stands out therefore stays pale, which is the point: how FOCUSED a slide was is
+in summary.csv as eff_tiles = 1/sum(w^2).
 
 Usage (cluster):
-    python scripts/attention_masks.py --root /mnt/projects/breast_cancer/brc_grading \
-        --split test --stage all --limit 3
+    python scripts/attention_masks.py --split test --stage all --limit 3   # smoke test
+    python scripts/attention_masks.py                                      # the whole test split
+
+CPU only: the head is 17 k parameters and the embeddings are already on disk
+(600 tiles/s/core measured in job brc-grading-attn), so this needs no GPU.
+
+Read this before showing the overlays: the weights are verified NOT degenerate
+(20-415 tiles of a bag participate) but they are NOT yet shown to prefer tumour
+epithelium over stroma -- the tumour-vs-stroma contrast measured 0.48 AUC, i.e.
+below chance (REPORT.md 10). Present the overlay as "where the grade head looked",
+not as "where the tumour is".
 """
 import argparse
+import hashlib
 import json
-import math
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ml.models.module import ModelModule
 
-TILE = 224   # tile footprint in level-1 px; stride == size, so tiles never overlap
-UP = 2       # level-1 -> level-0 linear factor on these slides (0.2339 / 0.4678 mpp)
+TILE = 224    # tile footprint in level-1 px; stride == size, so tiles never overlap
+FEATURE_DIM = 2560  # Virchow2
+GRADES = ("N", "G1", "G2", "G3")  # class 0 = no tumour epithelium, 1-3 = Nottingham
+BASE = Path("/mnt/projects/breast_cancer/brc_grading")
+ARTIFACT = BASE / "artifacts" / "foldavg-20261111-1718"
+
+
+def load_models(checkpoints, dropout: float = 0.2):
+    """Rebuild the shipped architecture and load each fold's weights, strictly.
+
+    The checkpoints carry no hyper_parameters (the module never calls
+    save_hyperparameters), so the architecture is rebuilt by hand and
+    ``strict=True`` makes a wrong layer width fail loudly instead of silently
+    giving another model's attention.
+    """
+    from ml.models import AttentionMIL, IdentityEncoder, LinearHead
+    from ml.models.module import GradingModule
+
+    models = []
+    for path in checkpoints:
+        module = GradingModule(
+            encoder=IdentityEncoder(out_dim=FEATURE_DIM),
+            aggregator=AttentionMIL(feature_dim=FEATURE_DIM, attention_dim=512),
+            head=LinearHead(in_dim=FEATURE_DIM, out_dim=len(GRADES), dropout=dropout),
+        )
+        state = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
+        module.load_state_dict(state, strict=True)
+        models.append(module.eval())
+        print(f"[stage1] loaded {Path(path).parent.name} ({len(state)} tensors)", flush=True)
+    return models
+
+
+def score_bag(models, feats: np.ndarray):
+    """Fold-average softmax probabilities and per-tile attention over one bag.
+
+    Averaging the softmax is what the shipped manifest prescribes; both averages
+    are taken in probability space because every fold normalises over the same bag.
+    """
+    bag = torch.from_numpy(np.ascontiguousarray(feats, dtype=np.float32))
+    probs, attn = [], []
+    with torch.no_grad():
+        for module in models:
+            logits, weight = module(bag)
+            probs.append(torch.softmax(logits, dim=-1).numpy())
+            attn.append(weight.numpy())
+    p = np.mean(probs, axis=0)
+    a = np.mean(attn, axis=0)
+    return p / p.sum(), a / a.sum()
+
+
+def participation(weight: np.ndarray) -> float:
+    """How many tiles the attention actually spreads over (inverse perplexity)."""
+    return float(1.0 / max(float((weight ** 2).sum()), 1e-12))
 
 
 def encode_values(w: np.ndarray) -> np.ndarray:
-    """Attention weights -> uint8 mask values (0 = no tile, 255 = brightest)."""
+    """Attention weights -> uint8 mask values (0 = no tile, 255 = 100x an equal share).
+
+    Absolute scale, identical on every slide: value = decades of attention above
+    an equal share (1/N), so 1 = an average tile, 128 = 10x, 255 = 100x or more.
+    """
     n = len(w)
     if n == 0:
         return np.zeros(0, dtype=np.uint8)
     r = np.where(w > 0, np.log10(np.maximum(w, 1e-12) * n), -np.inf)  # decades above an equal share
-    denom = max(math.log10(max(float(w.max()) * n, 10.0)), 1e-9)
-    return np.where(w > 0, 1 + np.round(254.0 * np.clip(r / denom, 0.0, 1.0)), 0).astype(np.uint8)
+    return np.where(w > 0, 1 + np.round(254.0 * np.clip(r / 2.0, 0.0, 1.0)), 0).astype(np.uint8)
 
 
-def stage_scores(args, sel, emb_dir, device):
-    """One row per tile (mean attention over folds) + one row per slide."""
-    models = []
-    for ckpt in args.checkpoints:
-        conf = OmegaConf.load(Path(ckpt).parent / "config.yaml")
-        m = ModelModule.load_from_checkpoint(ckpt, cfg=conf, map_location="cpu")
-        models.append(m.eval().to(device))
-    print(f"[stage1] {len(models)} models on {device}", flush=True)
+def stage_scores(args, sel, emb_dir):
+    """One row per tile (fold-averaged attention) + one row per slide."""
+    models = load_models(args.checkpoints, dropout=args.dropout)
+    # cache is keyed by slide content AND by which weights produced the scores
+    tag = hashlib.md5("|".join(str(Path(c).parent.name) for c in args.checkpoints).encode()).hexdigest()[:8]
 
     cache_dir = Path(args.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     tiles, slides = [], []
     for i, row in enumerate(sel.itertuples(), 1):
-        src = emb_dir / row.slide_id / f"{row.slide_id}.pt"
+        src = emb_dir / f"{row.slide_id}.parquet"
         if not src.exists():
-            print(f"[warn] no bag for {row.slide_id}", flush=True)
+            print(f"[warn] no embeddings for {row.slide_id}", flush=True)
             continue
         st = src.stat()
-        cache = cache_dir / f"{row.slide_id}__{st.st_size}__{int(st.st_mtime)}.npz"
+        cache = cache_dir / f"{row.slide_id}__{st.st_size}__{int(st.st_mtime)}__{tag}.npz"
         if cache.exists():
             z = np.load(cache)
-            w, logits, xs, ys = z["w"], z["logits"], z["x"], z["y"]
+            w, probs, xs, ys = z["w"], z["probs"], z["x"], z["y"]
         else:
-            bags = torch.load(src, map_location="cpu", weights_only=False)
-            if isinstance(bags, dict):
-                bags = [bags]
-            bag = bags[0]
-            xs, ys = bag["x"].numpy(), bag["y"].numpy()
-            emb = bag["embedding"].unsqueeze(0).to(device).float()
-            ws, ls = [], []
-            with torch.no_grad():
-                for m in models:
-                    feats = m.model(emb).float()
-                    wt, _ = m.aggregator(feats, None)
-                    ws.append(wt.squeeze(0).float().cpu().numpy())
-                    ls.append(m.head(feats).squeeze(0).float().cpu().numpy())
-            w = np.mean(ws, axis=0)                       # fold-average attention
-            logits = np.mean(ls, axis=0)                  # fold-average logits, then softmax
-            del bags, emb
-            np.savez_compressed(cache, w=w, logits=logits, x=xs, ys=ys)
-        probs = logits.softmax(0) if logits.ndim == 1 else logits.mean(0).softmax(0)
+            bag = pd.read_parquet(src, columns=["x", "y", "embedding"])
+            xs, ys = bag.x.to_numpy(), bag.y.to_numpy()
+            probs, w = score_bag(models, np.stack(bag.embedding.values))
+            del bag
+            np.savez_compressed(cache, w=w, probs=probs, x=xs, ys=ys)
         p = int(probs.argmax())
         t = int(row.grade)
         slides.append({"slide_name": row.slide_id, "case": row.case, "truth": t, "pred": p,
                        "correct": int(t == p), "n_tiles": len(w),
                        "max_weight": round(float(w.max()), 5),
-                       "eff_tiles": round(1.0 / max(float((w ** 2).sum()), 1e-12), 1),
+                       "eff_tiles": round(participation(w), 1),
                        "probs": json.dumps([round(float(v), 4) for v in probs])})
         tiles.append(pd.DataFrame({"slide_name": row.slide_id, "x": xs, "y": ys,
                                    "value": encode_values(w)}))
@@ -152,6 +197,10 @@ def stage_masks(args, tile_df, sel):
         del mask
         if fx != 1 or fy != 1:
             img = img.zoom(fx, fy)
+        # odd level-0 dims: 2*level1 can be 1 px short of level 0 -> pad with background
+        # (cropping there would fail with "bad extract area")
+        if img.width < w0 or img.height < h0:
+            img = img.embed(0, 0, max(w0, img.width), max(h0, img.height), extend="black")
         if img.width != w0 or img.height != h0:
             img = img.crop(0, 0, w0, h0)
         img.tiffsave(str(path), tile=True, pyramid=True, bigtiff=True, compression="lzw")
@@ -171,13 +220,18 @@ def stage_report(args, summary, sel):
 #
 # Masks are uint8 grayscale (0-255):
 #   0    = no tile here (background / QC-filtered)
-#   1-255 = log10(attention / equal share of this slide's attention), rescaled
-#           per slide so the brightest tile is 255. Red = the tiles the grade
-#           head leaned on most; blue = barely above an average tile.
+#   1    = an equal share of this slide's attention (1/N)
+#   128  = 10x an equal share
+#   255  = 100x an equal share or more
+# One absolute scale for every slide, so a colour means the same thing everywhere;
+# a pale slide is one where the grade head did not focus anywhere in particular.
 # Focus per slide (eff_tiles = 1/sum(w^2)) is in summary.csv next to the masks.
+# Caveat (REPORT.md 10): these weights are verified not-degenerate, but a
+tumour-vs-stroma contrast of 0.48 AUC means we cannot claim they mark tumour.
+# Show them as "where the model looked", not "where the tumour is".
 #
 # Run:
-#     python -m report --config-dir report_conf reporter=attention user=<you>
+#     python -m report --config-dir report_conf reporter=attention_{out_dir.name} user=<you>
 
 defaults:
   - _self_
@@ -207,9 +261,9 @@ mask_retrievers:
           type: custom_colormap
           default:
           - ''            # 0 = no tile, hidden
-          - "#2166AC"     # weak  (near an equal share)
-          - "#F7F7F7"     # medium
-          - "#B2182B"     # strong (the tiles the grade head leaned on)
+          - "#2166AC"     # weak  (< ~5x an equal share)
+          - "#F7F7F7"     # medium (5-40x)
+          - "#B2182B"     # strong (> 40x an equal share)
           steps: 4
           mode: qualitative
           interactive: true
@@ -218,8 +272,8 @@ mask_retrievers:
         threshold:
           breaks:
           - 0.003922     # value 0 = no tile
-          - 0.35
-          - 0.70
+          - 0.25         # value 64  ~ 5x an equal share
+          - 0.63         # value 160 ~ 40x an equal share
           mask:
           - 0            # background: hidden
           - 1            # weak: shown
@@ -249,7 +303,7 @@ save:
     description: Fold-averaged attention of the 4-class Nottingham grade MIL over MAMMAPRINT WSIs
     user: ${{user}}
 """
-    dest = Path(args.report_yaml) if args.report_yaml else out_dir.parent / "report_conf" / "reporter" / "attention.yaml"
+    dest = Path(args.report_yaml) if args.report_yaml else BASE / "report_conf" / "reporter" / f"attention_{out_dir.name}.yaml"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(cfg)
     print(f"[stage3] {dest} ({len(rows)} slides)", flush=True)
@@ -257,50 +311,63 @@ save:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/config.yaml")
     ap.add_argument("--split", default="test")
-    ap.add_argument("--checkpoints", nargs="*", default=None)
+    ap.add_argument("--checkpoints", nargs="*", default=None,
+                    help="default: weights/*.ckpt of the newest <root>/artifacts/foldavg-* (the shipped ensemble)")
     ap.add_argument("--root", default="/mnt/projects/breast_cancer/brc_grading")
     ap.add_argument("--mask-dir", default=None, help="default <root>/masks/<split>")
     ap.add_argument("--report-yaml", default=None)
     ap.add_argument("--cache-dir", default=None, help="per-slide score cache (default <root>/score_cache)")
+    ap.add_argument("--dropout", type=float, default=0.2, help="must match the shipped recipe")
     ap.add_argument("--stage", choices=["scores", "masks", "report", "all"], default="all")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--slides", default=None, help="comma-separated slide ids (overrides --split/--limit)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
     if args.selftest:
-        w = np.array([0.0, 0.5, 0.001, 0.499])
-        v = encode_values(w)
-        assert v.max() == 255 and v[0] == 0, v            # brightest -> 255, zero weight -> 0
-        assert v[1] == 255 and v[3] == 255, v             # the two dominant tiles saturate
-        flat = encode_values(np.full(100, 0.01))          # every tile an equal share
-        assert set(flat.tolist()) == {1}, flat
-        ramp = encode_values(np.array([1e-6, 1e-4, 1e-2, 0.5]))
-        assert np.all(np.diff(ramp) > 0), ramp            # monotone in weight
+        v = encode_values(np.array([0.0, 0.5, 0.001, 0.499]))
+        assert v[0] == 0 and v[2] == 1 and v[1] > v[2], v   # no tile / equal share / above it
+        assert set(encode_values(np.full(100, 0.01)).tolist()) == {1}  # every tile an equal share
+        ten = encode_values(np.array([0.1] + [0.9 / 99] * 99))         # one tile at 10x the share
+        assert abs(int(ten[0]) - 128) <= 1, ten
+        big = encode_values(np.array([0.5] + [0.5 / 999] * 999))       # 500x -> saturated
+        assert big[0] == 255 and big[1] == 1, big
+        share = 1.0 / 250                                    # equal share of a 250-tile bag
+        bag = np.full(250, share)
+        bag[:4] = [share, 3 * share, 10 * share, 30 * share]
+        ramp = encode_values(bag)[:4]
+        assert np.all(np.diff(ramp) > 0), ramp               # strictly increasing while unsaturated
+        assert np.all(np.diff(encode_values(np.array([1e-6, 1e-4, 1e-2, 0.5]))) >= 0)  # never decreases
         assert encode_values(np.zeros(0)).size == 0
         print("selftest ok", v.tolist(), ramp.tolist())
         return
 
-    cfg = OmegaConf.load(args.config)
     labels = pd.read_csv(Path(args.root) / "labels.csv")
     mapping = pd.read_csv(Path(args.root) / "data_mapping.csv")
     mapping["slide_name"] = mapping.path.str.split("/").str[-2]
     emb_dir = Path(args.root) / "embeddings" / "bc20-24"
     args.cache_dir = args.cache_dir or str(Path(args.root) / "score_cache")
     args.mask_dir = args.mask_dir or str(Path(args.root) / "masks" / args.split)
-    args.checkpoints = args.checkpoints or [
-        str(Path(cfg.paths.output_dir) / f"attention-kf{k}" / "last.ckpt") for k in range(5)]
+    if not args.checkpoints:
+        arts = sorted(Path(args.root).glob("artifacts/foldavg-*"))
+        args.checkpoints = sorted(str(p) for p in arts[-1].glob("weights/*.ckpt")) if arts else []
+    if not args.checkpoints:
+        raise SystemExit("no checkpoints: pass --checkpoints or keep the foldavg artifact")
+    print(f"[init] {len(args.checkpoints)} models from "
+          f"{Path(args.checkpoints[0]).parent}", flush=True)
 
     sel = labels[labels.split == args.split].merge(
         mapping[["slide_name", "path", "case"]], left_on="slide_id", right_on="slide_name")
+    if args.slides:
+        want = {s.strip() for s in args.slides.split(",")}
+        sel = sel[sel.slide_id.isin(want)]
     if args.limit:
         sel = sel.head(args.limit)
     print(f"[init] {len(sel)} slides split={args.split} stage={args.stage}", flush=True)
 
     if args.stage in ("scores", "all"):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        stage_scores(args, sel, emb_dir, device)
+        stage_scores(args, sel, emb_dir)
     if args.stage in ("masks", "all"):
         tile_df = pd.read_csv(Path(args.mask_dir) / "attention_scores.csv")
         stage_masks(args, tile_df, sel)
