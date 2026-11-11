@@ -42,7 +42,7 @@ def main() -> None:
 
     for a, b in [("train", "test"), ("val", "test"), ("train", "val")]:
         shared = by_split.get(a, set()) & by_split.get(b, set())
-        rows = labels[labels["split"] == b & labels["case"].isin(shared)]
+        rows = labels[(labels["split"] == b) & labels["case"].isin(shared)]
         print(
             f"{a} x {b}: {len(shared)} cases on both sides -> "
             f"{len(rows)} of {int((labels.split == b).sum())} {b} slides seen at case level"
