@@ -160,19 +160,28 @@ replication, byte-identical to drawing at level 0 for a quarter of the memory) p
 uv run --no-sync python scripts/run_masks.py                  # test split -> job
 MASKS_SPLIT=train uv run --no-sync python scripts/run_masks.py
 kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
+# report YAML only, from whatever masks are already on the PVC:
+#   --stage report   (it is written at the end of a full run, so a killed run has none)
 ```
 
 - Output: `/mnt/projects/breast_cancer/brc_grading/masks/<split>/{<slide>.tiff, attention_scores.csv,
   summary.csv}` (≈350 MB per slide — every slide in this estate is ~105 000 × 220 000 px — so ~90 GB for
   the 266 test slides; the PVC had 609 TB free when measured).
 - **Resumable**: existing masks and `score_cache/` (keyed by parquet bytes + which weights) are skipped,
-  so a resubmit continues. Masks are big enough that one slide takes ~2.5 min on 1 core; `MASKS_CPU` is
-  the knob (libvips encodes one TIFF tile per thread, `VIPS_CONCURRENCY=$(nproc)` is set by the job).
+  so a resubmit continues. Measured 2.4 min per slide on the 8-CPU pod (every slide here is ~23 Gpx at
+  level 0, and most of that is LZW encoding 99 % background) -> **~10.5 h for the 266 test slides**.
+  `MASKS_CPU` is the knob (libvips encodes one TIFF tile per thread, `VIPS_CONCURRENCY=$(nproc)` is set by
+  the job); to go faster, shard the slide list across jobs instead of raising the CPU — the encode is
+  sequential per slide.
 - Values are an **absolute** scale so a colour means the same on every slide: 0 = no tile, 1 = an equal
   share of that slide's attention, 128 = 10x, 255 = 100x or more. Pale = the head did not focus.
-- Verified on 3 test slides: 12-level pyramid, level-0 dims equal the slide's, and the mask value at
-  `(2x, 2y)` equals the CSV value for the same tile. Odd level-0 dims need `embed`, not `crop` (a 1-px
-  `bad extract area` failure otherwise).
+- Verified on the job's own output: 12-level pyramid, level-0 dims equal the slide's, and the mask value at
+  `(2x, 2y)` equals the `attention_scores.csv` value for the same tile. **Registration tested**: tile rects
+  built from the coordinates sit on tissue 49.8 % of the time vs 1.3-3.8 % for the same rects shifted
+  200/500/1500 px at level 6 (whole slide 1.7 %) — the overlay lands where the tiles are, so the
+  level-1-coordinate assumption is right. Odd level-0 dims need `embed`, not `crop` (a 1-px
+  `bad extract area` failure otherwise). Stage 1 independently reproduces the shipped test accuracy
+  **0.8534** on all 266 slides in ~4 min.
 - Show the overlay as "where the grade head looked", **not** "where the tumour is": §10 measured
   tumour-vs-stroma contrast 0.48 (below chance). The caveat is written into the report YAML too.
 
