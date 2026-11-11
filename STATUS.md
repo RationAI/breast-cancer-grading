@@ -595,3 +595,32 @@ recipe text). Built by `scripts/freeze_artifact.py`, which refuses to overwrite 
 already has a manifest. Scoring a new cohort needs no new code: run `ml.train` per checkpoint with
 `checkpoint=... dataset.paths.labels=<cohort csv> eval.split=test`, then average the per-slide
 softmaxes — the same averaging `scripts/ensemble_variants.py` does across folds.
+
+## The paired lambda test: ship lambda = 0 unless the pathologist asks otherwise (2026-11-11, job `brc-grading-lambda`)
+
+Same 1469 out-of-fold slides, same model, two operating points. Discordant pairs, not averages:
+
+| recipe | raw accuracy, no rule vs rule | discordant | McNemar | flips **into** undercall | out of undercall | under calls |
+|---|---|---|---|---|---|---|
+| cand (dropout 0.2) | **0.8530 vs 0.8393** | 40 / 20 | **p = 0.0135** | **31** | 2 | 108 → 137 |
+| ctl | **0.8482 vs 0.8230** | 49 / 12 | **p < 0.0001** | **42** | 1 | 125 → 166 |
+
+On the 266 test slides the same direction, not significant on its own: cand 11/6 (p = 0.33), 9 new
+undercalls and none removed; ctl 11/4 (p = 0.12).
+
+**Read this against the earlier "+1.9 points from the rule".** Both are true and they disagree
+because the metrics disagree. Balanced accuracy *rises* 0.7588 → 0.7775 because the rule trades 21
+slides of the 309-slide class 2 for 14 slides of the 84-slide class 1 and balanced accuracy weights
+those classes equally. Counted slide by slide the rule is **significantly worse at naming the grade
+correctly**, in both recipes, and it creates roughly fifteen undercalls for every one it removes.
+So the honest sentence is: *the rule buys recall on the rarest grade by spending per-slide
+correctness, and it spends it in the direction that matters.*
+
+Recommendation for the handoff, pending a cost matrix from the pathologist: **ship the 5-fold
+average with no prior correction.** On test that artifact is balanced accuracy 0.7449, AUROC
+0.9528, quadratic kappa 0.928, raw accuracy 0.8534, undercalls 25/266 (9.4 %) against 34/266
+(12.8 %) for the corrected one. Choosing λ = 1.5 for a better-looking balanced-accuracy column
+would triple the dangerous errors on 1469 slides, which the ladder showed and the paired test
+confirms. The frozen manifest's note currently says "prior rule lambda fitted out-of-fold"; treat
+that as superseded by this section - the manifest gets rewritten when the winning arm is frozen
+after the tile wave, and no new directory is needed for a note.
