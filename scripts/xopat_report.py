@@ -40,16 +40,20 @@ VENDOR = ROOT / "vendor" / "report"
 CONF_DIR = ROOT / "report_conf"
 EXPERIMENT = "Breast Cancer Grading"
 
-# orjson is a dependency of `report` that our locked venv does not carry.
-NEXUS = "https://nexus.rationai.cloud/repository/pypi-internal-all/simple/"
+# orjson is a dependency of `report` that our locked venv does not carry; uv's
+# configured index reaches nexus through the pod proxy, so no --index-url here.
 
 
 def compose_forms(conf_dir: Path) -> list[list[str]]:
-    """The two ways Hydra can be told about an external config group dir.
+    """The two ways to point Hydra at an external ``reporter/`` config dir.
 
-    ``--config-dir`` is what Tile-Morph documents; whether it also has to supply
-    the app's primary config depends on the Hydra version, so ``report`` finds
-    out instead of us guessing.
+    Verified locally against the package: ``--config-dir`` acts as an *extra*
+    group dir -- the app's primary config (and its ``mlflow``/``hydra`` groups)
+    still come from the installed package, so ``report_conf`` only has to hold
+    ``reporter/*.yaml``. The reporter override itself has to be ``+reporter=``
+    because upstream ``default.yaml`` keeps ``reporter`` a plain node, so a bare
+    ``reporter=name`` has no defaults-list match ("Could not override
+    'reporter'").
     """
     return [
         ["--config-dir", str(conf_dir)],
@@ -58,7 +62,12 @@ def compose_forms(conf_dir: Path) -> list[list[str]]:
 
 
 def run_report(
-    form: list[str], reporter: str, user: str, out_dir: Path, resolve_only: bool
+    form: list[str],
+    reporter: str,
+    user: str,
+    out_dir: Path,
+    resolve_only: bool,
+    env: dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
     """One invocation of the report app in its own hydra run dir."""
     argv = [
@@ -66,14 +75,14 @@ def run_report(
         "-m",
         "report",
         *form,
-        f"reporter={reporter}",
+        f"+reporter={reporter}",
         f"user={user}",
         f"hydra.run.dir={out_dir}",
     ]
     if resolve_only:
         argv += ["--cfg", "job", "--resolve"]
     return subprocess.run(
-        argv, check=False, capture_output=True, text=True, timeout=3600
+        argv, check=False, capture_output=True, text=True, timeout=3600, env=env
     )
 
 
@@ -148,8 +157,6 @@ def main(argv: list[str] | None = None) -> int:
                 "install",
                 "--python",
                 sys.executable,
-                "--index-url",
-                NEXUS,
                 "orjson",
             ],
             check=False,
@@ -159,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     working: list[str] | None = None
     for form in compose_forms(args.conf_dir):
-        probe = run_report(form, args.reporter, args.user, out_dir, resolve_only=True)
+        probe = run_report(
+            form, args.reporter, args.user, out_dir, resolve_only=True, env=env
+        )
         ok = "mask_retrievers" in probe.stdout
         print(f"form {form}: {'composes' if ok else 'FAILED'}")
         if not ok:
@@ -172,7 +181,9 @@ def main(argv: list[str] | None = None) -> int:
         print("FATAL: neither hydra invocation composes the config")
         return 1
 
-    result = run_report(working, args.reporter, args.user, out_dir, resolve_only=False)
+    result = run_report(
+        working, args.reporter, args.user, out_dir, resolve_only=False, env=env
+    )
     print((result.stdout + result.stderr)[-2500:])
 
     produced = sorted(out_dir.rglob("report.html"))
