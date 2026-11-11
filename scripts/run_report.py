@@ -8,6 +8,9 @@ the cluster, and this laptop's kubeconfig cannot even list services outside
     REPORT_VARIANTS=full_s456,full_ord_s456 uv run --no-sync python scripts/run_report.py
     REPORT_JOB_NAME=brc-grading-ensemble REPORT_SCRIPT=ensemble_variants.py \
       uv run --no-sync python scripts/run_report.py
+    REPORT_JOB_NAME=brc-grading-oof REPORT_SCRIPT=ensemble_variants.py \
+      REPORT_VARIANTS=kf0-ctl,kf1-ctl,kf2-ctl,kf3-ctl,kf4-ctl \
+      REPORT_ARGS='--oof --train-counts 474,54,203,234' uv run --no-sync python scripts/run_report.py
 
 Then read it from the pod's logs::
 
@@ -43,7 +46,9 @@ submit_job(
             f" --variants {os.environ['REPORT_VARIANTS']}"
             if os.getenv("REPORT_VARIANTS")
             else ""
-        ),
+        )
+        # Anything else the script takes (--oof, --train-counts, --checkpoint-root).
+        + (" " + os.environ["REPORT_ARGS"] if os.getenv("REPORT_ARGS") else ""),
         # Green-but-did-nothing pods are useless; make the status honest.
         "[ $? -eq 0 ] || { echo FATAL: report failed; exit 1; }",
     ],
