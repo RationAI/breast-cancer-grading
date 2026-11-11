@@ -473,3 +473,31 @@ moves ~6 points across seeds. Most of the overnight arms could not have answered
   inspection, no slide-level visualisation).
 - Calibration, and behaviour on external data (bc20-24 only, single scanner estate).
 - Any comparison to published BCI / bc20-24 baselines — no external baseline has been run.
+
+## Cluster headroom, read from monitoring instead of guessed (2026-11-11)
+
+`run_train.py` says a 48 Gi request "does not schedule on a GPU node" and the first pack today was sized
+at 24 Gi from that memory. Both are wrong about *why*. The A40 pool, read from the cluster's Prometheus
+(via Grafana's anonymous datasource proxy — see `STATUS.md` recipe below / the `check-cluster-headroom`
+skill):
+
+| | per node | across the 7 A40 nodes |
+|---|---|---|
+| RAM | 496 Gi total, **352–430 Gi free** | 2 816 Gi free |
+| CPU | 64 cores, **31–51 free** | 288 cores free |
+| GPUs | 1, except `kub-as10` / `kub-as11` with **2 A40s each** | 9 cards, mean **18 % utilization** |
+
+So host RAM is *not* scarce and never was the node limit. The real ceiling is the **namespace quota**:
+`requests.memory` hard = **1 554 GiB** for `rationai-jobs-ns`, 746 GiB of it used by other jobs at the
+time of reading (`requests.cpu` 402 hard / 156 used). A 48 Gi pod getting "resource is out of usage:
+memory" was that budget being momentarily spent, not a 64-core node with 400 Gi free refusing it.
+**Check `kube_resourcequota` before a fat submission, not folklore.**
+
+What the cards are actually doing while our five fold pods run: each pod holds a whole A40 and uses
+**11–20 GiB of 46 GiB at 0–56 % utilization**; a `nuclei-graph` job elsewhere on the pool is at 100 %.
+So "fill the VRAM" is the wrong target — framebuffer held is not work done. These runs are parquet-decode
+bound (a 2-run pod uses 2–4 of its 8 cores, i.e. the workers wait on I/O, not on the SMs), and the metric
+to chase is utilization and slides/s. Concurrency does lift it, so the shape for the next batch is one
+card per pod with **6 runs per pod** (measured ~6 GiB framebuffer and 8–12 GiB RAM per whole-bag run →
+36 GiB VRAM, ~70 Gi RAM, ~16 cores): 5 folds × 2 recipes in **2 pods** instead of 5, with the quota
+checked first. 100 % utilization is not reachable for this workload by packing alone.
