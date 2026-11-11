@@ -624,3 +624,45 @@ would triple the dangerous errors on 1469 slides, which the ladder showed and th
 confirms. The frozen manifest's note currently says "prior rule lambda fitted out-of-fold"; treat
 that as superseded by this section - the manifest gets rewritten when the winning arm is frozen
 after the tile wave, and no new directory is needed for a note.
+
+## "Miss nothing, few false alarms" = escalate, and the price list (2026-11-11, job `brc-grading-escalate`)
+
+The stated objective is: never report a slide lower than it is, at a modest cost in false alarms.
+Two things had to be settled before spending GPU on it.
+
+**1. The words "miss grade 3" point two opposite ways, and the model's errors are not where the
+phrase suggests.** Out-of-fold confusion, row class 1 (= B-RAD grade 3), 84 slides:
+`3 -> c0, 46 correct, 33 -> c2, 2 -> c3`. A true grade-3 slide is called benign/grade-2 **3 times in
+84**; three quarters of its errors go *upward* to grade 4. Detection of "anything above grade 2" is
+already **98.0 %** (15 misses in 750 tumour slides) and only 20 of 719 bottom-class slides are
+escalated. Where the dangerous direction actually lives is the top of the scale: 44/309 class-2 and
+61/357 class-3 slides are read *lower* than they are. So "do not miss grade 3" is nearly free
+already; "do not miss anything" means the grade-4 and grade-5 undercalls.
+
+**2. The prior rule is the wrong knob for it and escalation is the right one.** λ>0 moves mass
+toward the *rarest* class, which sits below class 2 - it manufactures grade-4-read-as-grade-3
+errors. Escalation (`log p_c + beta * c`, in `ensemble_variants.escalate`) biases every call
+upward. Price list, 1469 out-of-fold slides, `cand`, base λ = 0:
+
+| β | detect >c0 | missed | false alarms | undercalls | overcalls | bal | κ |
+|---|---|---|---|---|---|---|---|
+| 0.00 | 0.9800 | 15 | 20 | 108 | 108 | 0.7588 | 0.924 |
+| 0.20 | 0.9827 | 13 | 25 | 92 | 125 | 0.7508 | 0.920 |
+| **0.50** | 0.9827 | 13 | **31** | **76** | 143 | 0.7443 | 0.912 |
+| 0.75 | 0.9867 | 10 | 37 | 63 | 165 | 0.7305 | 0.904 |
+| 1.00 | 0.9880 | 9 | 55 | 57 | 200 | 0.7108 | 0.871 |
+
+"False alarm" here = a grade-2 slide escalated to grade 3 or above, i.e. the ones that cost the
+pathologist time on a benign slide: 31 at β = 0.5 is 4.3 % of the 719 bottom-class slides.
+
+**Reading: β ≈ 0.5 is the knee.** It removes 30 % of the dangerous errors (108 → 76) for 11 extra
+false alarms and 1.4 points of balanced accuracy; β = 0.75 removes 42 % for 17. β = 1.0 costs 35
+false alarms and 4.8 points to save the last 51 → 9 misses, and it *reduces* class-1 recall to 0.39
+because escalating pushes real grade-3 slides into grade 4 - the one way the stated goal and
+"correct grade name" genuinely conflict. Note also that **99 % detection is unreachable with this
+bias** (best 98.8 % at the grid maximum), so the report's auto-pick printed β = 1.0; that is a grid
+artefact, now labelled as one in the output.
+
+Nothing was trained for this: one model, one frozen artifact, and an operating point that is a
+addition of `beta * class_index` in log space at inference. Decide β, and it can be written into the
+manifest when the winning arm is frozen.

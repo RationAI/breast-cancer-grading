@@ -406,6 +406,12 @@ def escalation_ladder(
         if chosen is None and sens >= target:
             chosen = beta
     chosen = betas[-1] if chosen is None else chosen
+    if rows[-1][1] < target:
+        print(
+            f"    target NOT reachable with this bias: best detection {rows[-1][1]:.4f} at beta "
+            f"{betas[-1]} (the grid maximum), so the beta below is the most aggressive tested, "
+            "not the cheapest that hits the target"
+        )
     print(f"    chosen beta = {chosen}")
     return float(chosen)
 
@@ -537,7 +543,8 @@ def pooled_oof(
         print(f"{tag}error direction on test, + rule: {direction(shipped.argmax(1), labels_t)}")
         escalated = escalate(average, beta).argmax(1)
         show(
-            f"{tag}{len(tests)}-fold average on test, escalated beta={beta} (chosen out-of-fold)",
+            f"{tag}{len(tests)}-fold average on test, escalated beta={beta} (protocol pick on "
+            "out-of-fold rows, see the ladder above)",
             np.eye(NUM_CLASSES)[escalated],
             labels_t,
             auroc_from=average,
