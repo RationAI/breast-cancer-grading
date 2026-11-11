@@ -257,6 +257,86 @@ def show(
     return m
 
 
+def pooled_oof(
+    loaded: list[tuple[str, str, pd.DataFrame, pd.DataFrame]], prior: np.ndarray
+) -> None:
+    """Score every fold's held-out fifth together: ~1469 slides instead of 261.
+
+    Each fold's validation split is the fifth its model never trained on, so concatenating the
+    five validation frames is out-of-fold for the whole train+val pool. The decision rule is
+    fitted the honest way - leave one fold out, fit on the rest, predict that fold - so the
+    number includes fitting the rule and still has a ~1-point ruler instead of ±2.6.
+    """
+    columns = [f"prob_{c}" for c in range(NUM_CLASSES)]
+    rows = pd.concat(
+        [
+            valid[["slide_id", "label"]]
+            .assign(fold=variant)
+            .join(
+                pd.DataFrame(
+                    softmax(
+                        valid[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()
+                    ),
+                    columns=columns,
+                )
+            )
+            for variant, _, valid, _ in loaded
+        ],
+        ignore_index=True,
+    )
+    # Several recipes per fold average into one prediction per slide; a slide must not appear in
+    # two folds, which the fold generator guarantees and this would silently corrupt.
+    if rows.groupby("slide_id")["fold"].nunique().gt(1).any():
+        raise ValueError(
+            "a slide was held out by two folds - the label CSVs are not the same split"
+        )
+    pooled = rows.groupby(["slide_id", "label", "fold"], as_index=False)[columns].mean()
+    scores = pooled[columns].to_numpy()
+    labels = pooled["label"].to_numpy()
+    print(f"pooled out-of-fold over {pooled['fold'].nunique()} folds")
+    show("pooled out-of-fold, no rule", scores, labels)
+
+    corrected = np.zeros_like(scores)
+    for fold in pooled["fold"].unique():
+        mask = (pooled["fold"] == fold).to_numpy()
+        lam, _ = best_lambda(scores[~mask], labels[~mask], prior)
+        corrected[mask] = prior_corrected(scores[mask], prior, lam)
+    show("pooled out-of-fold + rule (fitted leave-one-fold-out)", corrected, labels)
+
+    per_fold = []
+    for fold in pooled["fold"].unique():
+        mask = (pooled["fold"] == fold).to_numpy()
+        temperature, bias, _ = fit_rescoring(scores[~mask], labels[~mask])
+        per_fold.append(
+            balanced_accuracy_score(
+                labels[mask], rescored(scores[mask], temperature, bias).argmax(1)
+            )
+        )
+    print(
+        f"pooled out-of-fold + bias/temp fitted leave-one-fold-out: "
+        f"{' '.join(f'{s:.3f}' for s in per_fold)} (spread {max(per_fold) - min(per_fold):.3f})"
+    )
+
+    # Every fold scores the same test slides, so they also average into one k-fold model. Its
+    # decision rule is fitted on the out-of-fold rows above, never on test.
+    tests = align([test for _, _, _, test in loaded])
+    if not tests or not len(tests[0]):
+        return
+    labels_t = tests[0]["label"].to_numpy()
+    average = np.mean(
+        [softmax(test[[f"logit_{c}" for c in range(NUM_CLASSES)]].to_numpy()) for test in tests],
+        axis=0,
+    )
+    show(f"{len(tests)}-fold average on test, no rule", average, labels_t)
+    lam, _ = best_lambda(scores, labels, prior)
+    show(
+        f"{len(tests)}-fold average on test + rule (lambda={lam:.1f} fitted out-of-fold)",
+        prior_corrected(average, prior, lam),
+        labels_t,
+        auroc_from=average,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -266,13 +346,29 @@ def main() -> None:
         "--checkpoint-root",
         default="/mnt/projects/breast_cancer/brc_grading/checkpoints",
     )
+    parser.add_argument(
+        "--train-counts",
+        default="",
+        help="Slide counts per class in train, for the prior. A k-fold run trains on four "
+        "fifths, so its prior is not the full-cohort one.",
+    )
+    parser.add_argument(
+        "--oof",
+        action="store_true",
+        help="Treat the variants as k folds of one recipe and pool their held-out fifths.",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
         return
 
-    prior = TRAIN_COUNTS / TRAIN_COUNTS.sum()
+    counts = (
+        np.array([float(c) for c in args.train_counts.split(",")])
+        if args.train_counts
+        else TRAIN_COUNTS
+    )
+    prior = counts / counts.sum()
     variants = [v for v in args.variants.split(",") if v]
     loaded: list[tuple[str, str, pd.DataFrame, pd.DataFrame]] = []
     for variant in variants:
@@ -286,6 +382,9 @@ def main() -> None:
         loaded.append((variant, epoch, valid, test))
     if not loaded:
         print("nothing to combine")
+        return
+    if args.oof:
+        pooled_oof(loaded, prior)
         return
 
     # One shared slide set, so every number below is paired across members.
