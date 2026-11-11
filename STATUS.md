@@ -198,9 +198,9 @@ Verified: the CSV recompute reproduces MLflow exactly for the four variants that
 
 ## Overnight batch: 8 arms, one knob each (submitted 2026-11-10 ~23:00 UTC)
 
-All at the config the last batch settled on — **2048 tiles/epoch, attention pooling** — so every
-arm is paired against a finished run at the **same seed**, and all of them dump per-slide
-predictions so they can join the ensemble afterwards. Pod shape 6 CPU / 32 Gi / whole A40,
+All at the config the last batch settled on — **that is what was intended; see the correction below** —
+so every arm was meant to be paired against a finished run at the **same seed**, and all of them dump
+per-slide predictions so they can join the ensemble afterwards. Pod shape 6 CPU / 32 Gi / whole A40,
 `cache_mb` 768/512/512, 4 workers.
 
 | arm | the one knob | paired against | what it asks |
@@ -214,10 +214,63 @@ predictions so they can join the ensemble afterwards. Pod shape 6 CPU / 32 Gi / 
 | `t2048-dr02-s456` | head `dropout` 0.5 → 0.2 | 0.7743 | …or is 0.5 too strong for a 10 k-param head |
 | `t2048-t4096-s456` | `datamodule.train.max_tiles` 2048 → 4096 | 0.7743 | the budget was never swept: only 2048 vs *all* has been measured |
 
+**Correction, read this before quoting any number below: 7 of the 8 arms never got the tile knob.**
+The submitted command lines contain `ml/aggregator`, the loss, `seed`, `cache_mb`, `model.…` — and
+`max_tiles` **only for `t4096`** (checked in the job YAML on 2026-11-11, `.spec…command`). The other
+seven trained on **whole bags**, the config default `max_tiles: null`, despite the `t2048-` prefix in
+their variant names, so MLflow logs `max_tiles=None` for them and the `t2048_*` names are a lie. Their
+baselines are therefore **`full_s456` 0.7372** and, at seed 123, `tiles2048_s123` **0.7486** — which is
+itself mis-named and also ran whole bags (`max_tiles=None`), the only whole-bag CE run at that seed.
+Paired against the right baselines, and ordered by the gain:
+
+| arm | test bal. | true baseline (same seed, whole bags, same loss) | Δ |
+|---|---|---|---|
+| `t2048_dr02_s456` (head dropout 0.5 → 0.2) | **0.7956** | 0.7372 | **+5.8** — and the best single run we have |
+| `t2048_acc_s123` (select on `valid/accuracy`) | 0.7846 | 0.7486 | +3.6 |
+| `t2048_w_s123` (class-weighted CE) | 0.7798 | 0.7486 | +3.1 |
+| `t2048_acc_s456` | 0.7661 | 0.7372 | +2.9 |
+| `t2048_ord_s123` (ordinal) | 0.7690 | 0.7486 | +2.0 |
+| `t2048_t4096_s456` (4096 tiles — the only arm that got its knob) | 0.7556 | 0.7372 whole / 0.7743 at 2048 | +1.8 / −1.9 |
+| `t2048_wd2_s456` (`weight_decay` 1e-2) | 0.7437 | 0.7372 | +0.7 |
+| `t2048_w_s456` (class-weighted CE) | 0.7475 | 0.7372 | +1.0 |
+
+Every one of those Δs is measured against a **single** baseline run at one seed, and the seed spread on
+an identical config is ~6 points — so a favourable Δ is a hypothesis until the arm has its own second
+seed, which is exactly the rule below. The 2048-vs-whole-bags question is also not settled by this
+batch, because it never tested 2048.
+
 The loss-selection knob deliberately leaves the LR scheduler on `valid/loss`: optimise on the
 loss, *choose* by the metric we report. `valid/accuracy` is balanced accuracy on 261 val slides,
 where c1 has 16 slides (6.25-point steps), so selection gets noisier — that is the risk in that
 pair of arms, not a bug.
+
+### First ensemble numbers (`brc-grading-ensemble3`, 2026-11-11, CPU only)
+
+With the epoch pairing fixed, the four variants that have dumps (whole bags: `full_s456`,
+`full_ord_s456`, `full_ord_s789`, `t2048_ord_s456`) averaged their softmax probabilities and were
+judged on the same 266 test slides:
+
+| | test bal. | AUROC | macro-F1 | kappa | recalls |
+|---|---|---|---|---|---|
+| best single member (`t2048_ord_s456`) | 0.7693 | 0.9544 | 0.7187 | 0.8994 | 0.99/0.79/0.57/0.73 |
+| **ensemble of 4** | **0.7856** | **0.9562** | **0.7550** | **0.9195** | 0.99/0.71/0.69/0.75 |
+
++1.6 points over its own best member, the best AUROC and macro-F1 in the whole experiment, for CPU
+minutes and no training. It does **not** yet beat `t2048_dr02_s456` (0.7956), which is one seed of one
+unconfirmed knob — so the honest statement is: ensembling is free and it works, and the open question
+is whether dropout-0.2 runs join it or stand alone.
+
+The uniform-prior decision rule is member-dependent, which is the finding:
+
+* `full_s456` (plain CE): λ\* = 0.8 from validation → test **0.7372 → 0.7768**, +4.0 points, one run.
+* `full_ord_s789`: λ\* = 0.1 → test 0.7432 → 0.7611, +1.8. `full_ord_s456` and `t2048_ord_s456`: λ\* =
+  0.0 — where the ordinal loss already moved the boundary, there is nothing left to correct.
+* the ensemble: λ\* = 0.0, validation curve monotonically *down* from 0.820, so averaging probabilities
+  had already absorbed the prior bias the rule corrects. Applying λ = 1 to it costs 3.9 points.
+
+So "the prior rule buys 4 points" is true of the CE runs and false of the ensemble and the ordinals;
+report it per recipe, never as a blanket gain. Two more ensemble jobs are queued to see whether the
+overnight arms (`brc-grading-ens-new`, all 8) and a best-4 blend (`brc-grading-ens-best4`) beat 0.7856.
 
 **Reading them in the morning** — MLflow is reachable from the laptop:
 
