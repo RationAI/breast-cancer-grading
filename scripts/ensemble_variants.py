@@ -258,6 +258,76 @@ def show(
     return m
 
 
+def confusion(name: str, pred: np.ndarray, labels: np.ndarray) -> None:
+    """Where the mistakes sit, as counts: rows are the pathologist, columns are the model."""
+    print(f"  confusion {name} (rows = label, cols = predicted)")
+    print("        " + " ".join(f"p{c:<4d}" for c in range(NUM_CLASSES)))
+    for truth in range(NUM_CLASSES):
+        row = [int(((pred == c) & (labels == truth)).sum()) for c in range(NUM_CLASSES)]
+        print(f"    t{truth}  " + " ".join(f"{v:5d}" for v in row))
+
+
+def direction(pred: np.ndarray, labels: np.ndarray) -> str:
+    """Which way the mistakes point, because balanced accuracy cannot tell.
+
+    ``pred < label`` means the model read a slide as *less* aggressive than the pathologist did -
+    an undercall, the error a clinician asks about first, and the one a screening score must not
+    trade away for a prettier average. ``pred > label`` is the harmless opposite.
+    """
+    d = np.asarray(pred) - np.asarray(labels)
+    steps = [
+        ("exact", d == 0),
+        ("under1", d == -1),
+        ("under2+", d <= -2),
+        ("over1", d == 1),
+        ("over2+", d >= 2),
+    ]
+    parts = [f"{name} {int(m.sum())} ({m.mean():.1%})" for name, m in steps]
+    per_class = " ".join(
+        f"c{c}:{int(((d < 0) & (labels == c)).sum())}/{int((labels == c).sum())}"
+        for c in range(NUM_CLASSES)
+    )
+    return (
+        ", ".join(parts) + f" of {len(labels)}; undercalled per class {per_class}"
+    )
+
+
+def lambda_ladder(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    prior: np.ndarray,
+    lambdas: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0),
+) -> list[dict]:
+    """Show what each rule strength buys and costs, instead of picking one.
+
+    Printed on out-of-fold rows only, and the shipped lambda stays **fitted** by ``best_lambda``.
+    Choosing the best row by eye on the slides it is scored on is the mistake behind the
+    retracted 0.8002. What is genuinely missing is the cost of an undercall versus an overcall,
+    and that is the pathologist's to state - so this prints counts, not a verdict.
+    """
+    print("  lambda ladder (shown, not chosen; a cost matrix decides the row):")
+    rows = []
+    for lam in lambdas:
+        corrected = prior_corrected(scores, prior, lam)
+        pred = corrected.argmax(1)
+        m = metrics_from_logits(labels, corrected)
+        row = {
+            "lambda": float(lam),
+            "balanced_accuracy": m["balanced_accuracy"],
+            "quadratic_kappa": m["quadratic_kappa"],
+            "undercalled": int((pred < labels).sum()),
+            "overcalled": int((pred > labels).sum()),
+        }
+        print(
+            f"    lambda {lam:>3.1f} bal={row['balanced_accuracy']:.4f} "
+            f"kappa={row['quadratic_kappa']:.4f} recals "
+            f"{m['recall_c0']:.2f}/{m['recall_c1']:.2f}/{m['recall_c2']:.2f}/{m['recall_c3']:.2f} "
+            f"under={row['undercalled']} over={row['overcalled']}"
+        )
+        rows.append(row)
+    return rows
+
+
 def _fold_recipe(variant: str) -> tuple[str, str]:
     """``kf3-ctl`` is fold ``kf3`` of recipe ``ctl``.
 
@@ -333,6 +403,14 @@ def pooled_oof(
             corrected.argmax(1) == labels, index=part["slide_id"].to_numpy()
         )
 
+        # Balanced accuracy hides *where* the errors are and *which way* they point, and both are
+        # the questions a pathologist asks before believing the number.
+        confusion("no rule", scores.argmax(1), labels)
+        confusion("+ rule", corrected.argmax(1), labels)
+        print(f"{tag}error direction out-of-fold, no rule: {direction(scores.argmax(1), labels)}")
+        print(f"{tag}error direction out-of-fold, + rule:   {direction(corrected.argmax(1), labels)}")
+        lambda_ladder(scores, labels, prior)
+
         per_fold = []
         for fold in np.unique(folds):
             trained, held = folds != fold, folds == fold
@@ -359,13 +437,15 @@ def pooled_oof(
             f"{tag}{len(tests)}-fold average on test, no rule", average, labels_t
         )
         lam, _ = best_lambda(scores, labels, prior)
+        shipped = prior_corrected(average, prior, lam)
         show(
             f"{tag}{len(tests)}-fold average on test + rule "
             f"(lambda={lam:.1f} fitted out-of-fold)",
-            prior_corrected(average, prior, lam),
+            shipped,
             labels_t,
             auroc_from=average,
         )
+        print(f"{tag}error direction on test, + rule: {direction(shipped.argmax(1), labels_t)}")
 
     if len(recipes) > 1:
         # Same slides, same rule-fitting protocol, so the fold spread cancels: this is the only

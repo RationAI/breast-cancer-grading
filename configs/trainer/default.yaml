@@ -10,7 +10,11 @@ callbacks:
     _target_: lightning.pytorch.callbacks.EarlyStopping
     monitor: valid/loss
     mode: min
-    patience: 10
+    # 10 idle epochs cost ~40 % of every wave: the best epoch was 0-5 in all ten fold runs,
+    # then each run waited out the full patience before stopping at epoch 15-28. Five is above
+    # every observed gap between the best epoch and the stop, and it cannot move best.ckpt,
+    # which is chosen by val loss.
+    patience: 5
   model_checkpoint:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     monitor: valid/loss
