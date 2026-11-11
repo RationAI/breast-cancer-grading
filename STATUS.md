@@ -182,6 +182,11 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
   level-1-coordinate assumption is right. Odd level-0 dims need `embed`, not `crop` (a 1-px
   `bad extract area` failure otherwise). Stage 1 independently reproduces the shipped test accuracy
   **0.8534** on all 266 slides in ~4 min.
+- The YAML lists **the slides whose masks existed when it was written**, so regenerate it with
+  `--stage report` once the run finishes. The `brc-grading-masks-test` job cloned the code before the
+  `#`-prefix fix, so **its own stage-3 YAML will not parse** — regenerate it, do not use that one.
+  Verified parseable output: `report_conf/reporter/attention_test.yaml`
+  (`yaml.safe_load` ok, `background.paths` = the WSIs, `mask_retrievers[0].dir_name` = the mask dir).
 - Show the overlay as "where the grade head looked", **not** "where the tumour is": §10 measured
   tumour-vs-stroma contrast 0.48 (below chance). The caveat is written into the report YAML too.
 
