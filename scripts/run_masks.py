@@ -18,6 +18,7 @@ import os
 
 from kube_jobs import storage, submit_job
 
+
 split = os.getenv("MASKS_SPLIT", "test")
 
 submit_job(

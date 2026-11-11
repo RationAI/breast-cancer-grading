@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TILE = 224    # tile footprint in level-1 px; stride == size, so tiles never overlap
@@ -188,7 +189,9 @@ def stage_masks(args, tile_df, sel):
         sl.close()
         mask = np.zeros((h1, w1), dtype=np.uint8)
         sub = tile_df[tile_df.slide_name == name]
-        for x, y, v in zip(sub.x.to_numpy(), sub.y.to_numpy(), sub.value.to_numpy()):
+        for x, y, v in zip(
+            sub.x.to_numpy(), sub.y.to_numpy(), sub.value.to_numpy(), strict=True
+        ):
             dx, dy = min(int(x), w1 - TILE), min(int(y), h1 - TILE)
             if dx < 0 or dy < 0:      # slide smaller than one tile at level 1
                 continue
@@ -209,7 +212,7 @@ def stage_masks(args, tile_df, sel):
 
 
 def stage_report(args, summary, sel):
-    """xOpat report YAML for the masks (same shape as Tile-Morph's lda_morphology.yaml)."""
+    """XOpat report YAML for the masks (same shape as Tile-Morph's lda_morphology.yaml)."""
     out_dir = Path(args.mask_dir)
     have = {t.stem for t in sorted(out_dir.glob("*.tiff"))}
     if not have:
@@ -242,7 +245,7 @@ background:
   _target_: report.masks.SlideRetriever
   paths:
 {paths}
-  layer_name: MAMMAPRINT WSI (MIRAX)
+  layer_name: WSI (Mirax)
 
 mask_retrievers:
   - _target_: report.masks.DriveMasksRetriever
@@ -298,9 +301,9 @@ save:
   _target_: report.save.MLFlowReportStorer
   artifact_path: report.html
   metadata:
-    experiment_name: Breast Cancer
+    experiment_name: Breast Cancer Grading
     run_name: MIL attention masks
-    description: Fold-averaged attention of the 4-class Nottingham grade MIL over MAMMAPRINT WSIs
+    description: Fold-averaged attention of the 4-class Nottingham grade MIL over the grading cohort WSIs
     user: ${{user}}
 """
     dest = Path(args.report_yaml) if args.report_yaml else BASE / "report_conf" / "reporter" / f"attention_{out_dir.name}.yaml"

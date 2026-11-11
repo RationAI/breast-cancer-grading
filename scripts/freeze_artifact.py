@@ -23,9 +23,10 @@ import os
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from glob import glob
 from pathlib import Path
+
 
 CHECKPOINT_ROOT = "/mnt/projects/breast_cancer/brc_grading/checkpoints"
 KFOLD_DIR = "/mnt/projects/breast_cancer/brc_grading/kfold"
@@ -73,7 +74,7 @@ def main() -> None:
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     out = Path(
         args.out
-        or f"{ARTIFACT_DIR}/foldavg-{datetime.now(timezone.utc):%Y%m%d-%H%M}"
+        or f"{ARTIFACT_DIR}/foldavg-{datetime.now(UTC):%Y%m%d-%H%M}"
     )
     if (out / "manifest.json").exists():
         raise SystemExit(f"FATAL: {out} is already frozen; refusing to overwrite a shipped artifact")
@@ -102,7 +103,7 @@ def main() -> None:
         print(f"froze {variant}: {entry['sha256'][:16]} {entry['bytes'] / 1e6:.1f} MB")
 
     manifest = {
-        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "git_sha": os.getenv("GIT_SHA")
         or os.getenv("CI_COMMIT_SHA")
         or subprocess_sha(),
@@ -130,7 +131,7 @@ def subprocess_sha() -> str:
             text=True,
             check=True,
         ).stdout.strip()
-    except Exception:  # noqa: BLE001 - provenance nicety, never a reason to fail a freeze
+    except Exception:
         return ""
 
 

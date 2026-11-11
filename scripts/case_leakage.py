@@ -13,9 +13,9 @@ Run as a report job:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import pandas as pd
+
 
 LABELS = "/mnt/projects/breast_cancer/brc_grading/labels.csv"
 
