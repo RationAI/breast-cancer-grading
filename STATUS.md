@@ -148,6 +148,34 @@ for spec in "kf0-tf1024:seed=42 datamodule.train.max_tiles=1024" \
 done
 ```
 
+### xOpat overlays for the pathologist (`scripts/run_masks.py`)
+
+`scripts/attention_masks.py` writes what xOpat needs, ported from Tile-Morph-Clustering so it behaves the
+way the LDA masks they already reviewed behave: per-slide **uint8 pyramid BigTIFF at level-0 dimensions**
+(blocks drawn in level-1 space — the space the tile coordinates are in, verified — then 2x pixel
+replication, byte-identical to drawing at level 0 for a quarter of the memory) plus
+`report_conf/reporter/attention_<split>.yaml` for `python -m report`.
+
+```bash
+uv run --no-sync python scripts/run_masks.py                  # test split -> job
+MASKS_SPLIT=train uv run --no-sync python scripts/run_masks.py
+kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
+```
+
+- Output: `/mnt/projects/breast_cancer/brc_grading/masks/<split>/{<slide>.tiff, attention_scores.csv,
+  summary.csv}` (≈350 MB per slide — every slide in this estate is ~105 000 × 220 000 px — so ~90 GB for
+  the 266 test slides; the PVC had 609 TB free when measured).
+- **Resumable**: existing masks and `score_cache/` (keyed by parquet bytes + which weights) are skipped,
+  so a resubmit continues. Masks are big enough that one slide takes ~2.5 min on 1 core; `MASKS_CPU` is
+  the knob (libvips encodes one TIFF tile per thread, `VIPS_CONCURRENCY=$(nproc)` is set by the job).
+- Values are an **absolute** scale so a colour means the same on every slide: 0 = no tile, 1 = an equal
+  share of that slide's attention, 128 = 10x, 255 = 100x or more. Pale = the head did not focus.
+- Verified on 3 test slides: 12-level pyramid, level-0 dims equal the slide's, and the mask value at
+  `(2x, 2y)` equals the CSV value for the same tile. Odd level-0 dims need `embed`, not `crop` (a 1-px
+  `bad extract area` failure otherwise).
+- Show the overlay as "where the grade head looked", **not** "where the tumour is": §10 measured
+  tumour-vs-stroma contrast 0.48 (below chance). The caveat is written into the report YAML too.
+
 `TRAIN_EMB_CACHE_GB` is refused when it exceeds half the pod; prefer the explicit `cache_mb` trio. Report
 jobs: `REPORT_JOB_NAME=… REPORT_SCRIPT=ensemble_variants.py REPORT_VARIANTS=… REPORT_ARGS='--oof
 --train-counts 575,67,247,286' uv run --no-sync python scripts/run_report.py` (delete a same-named job
