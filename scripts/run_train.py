@@ -122,7 +122,10 @@ def cache_budget_gib(overrides: str, emb_cache_gb: str) -> float:
     splits = [
         int(m) for m in re.findall(r"(?:train|val|test)\.cache_mb=(\d+)", overrides)
     ]
-    nominal_gib = sum(splits) / 1024 if len(splits) == 3 else float(emb_cache_gb) * 3
+    # Every match counts, not one trio: a ``TRAIN_PLAN`` pack carries its own cache_mb set per
+    # run, and summing only when exactly three showed up scored a two-run pack as the 18 GB
+    # config default and refused a pod that fits twice over.
+    nominal_gib = sum(splits) / 1024 if splits else float(emb_cache_gb) * 3
     workers = re.search(r"num_workers=(\d+)", overrides)
     return (
         nominal_gib * (int(workers.group(1)) if workers else 8) * 2

@@ -111,4 +111,15 @@ else:
     raise AssertionError("the shape that OOMKilled three pods must be refused")
 run_train.check_cache_budget(14.0, "32Gi")  # the shape the finished runs used
 
+# A two-run pack: both runs' cache_mb sets count, so 2 x (512+256+256) MB x 2 workers x 2
+# (fp16 on disk, float32 decoded). Scoring this as the 18 GB default refused a 32 Gi pod that
+# only needs 8.
+_pair = ";".join(
+    f"kf{i}-tf1024:datamodule.num_workers=2 datamodule.train.cache_mb=512"
+    " datamodule.val.cache_mb=256 datamodule.test.cache_mb=256"
+    for i in (0, 1)
+)
+assert run_train.cache_budget_gib(_pair, "18") == 8.0, run_train.cache_budget_gib(_pair, "18")
+run_train.check_cache_budget(8.0, "32Gi")
+
 print("run_train plan-packing test passed")
