@@ -501,3 +501,36 @@ to chase is utilization and slides/s. Concurrency does lift it, so the shape for
 card per pod with **6 runs per pod** (measured ~6 GiB framebuffer and 8–12 GiB RAM per whole-bag run →
 36 GiB VRAM, ~70 Gi RAM, ~16 cores): 5 folds × 2 recipes in **2 pods** instead of 5, with the quota
 checked first. 100 % utilization is not reachable for this workload by packing alone.
+
+## The 5-fold wave (10 runs, 1469 out-of-fold slides): the candidate wins, the prior rule mostly does not
+
+Both recipes pooled in one report, and for the first time compared **paired, slide by slide**
+(`scripts/ensemble_variants.py --oof` now reads fold from the name prefix and recipe from the
+suffix, so `kf3-ctl` and `kf3-cand` are pooled separately instead of averaged or refused). Every λ
+is fitted leave-one-fold-out; the 266 test slides were read once, at the end.
+
+| recipe | OOF argmax | OOF + rule | rule Δ | test 5-fold avg, no rule | test + rule | test AUROC | κ |
+|---|---|---|---|---|---|---|---|
+| `ctl` (defaults) | 0.7612 | 0.7593 | **−0.2** | 0.7566 | 0.7861 | 0.9470 | 0.895 |
+| `cand` (dropout 0.2, 2048 train tiles) | 0.7588 | **0.7775** | **+1.9** | 0.7449 | **0.7959** | 0.9528 | 0.904 |
+
+**Paired on the same 1469 out-of-fold slides: cand 0.8393 vs ctl 0.8230 accuracy, 62/38
+discordant, McNemar p = 0.021.** dropout 0.2 + 2048 train tiles is a small but real +1.6-point win.
+The 4-fold interim said +0.8 OOF and −1.2 test — a sign flip, i.e. exactly the noise the pairing was
+built to remove. Fold-to-fold spread is 0.044 (ctl) / 0.055 (cand): larger than the whole effect, so
+no ±2-point claim from a single split has ever meant anything in this project.
+
+1. **Ship the fold average, not a seed.** cand 5-fold average + rule = **0.7959** balanced accuracy
+   / AUROC 0.9528 / κ 0.904, recalls 0.98/0.86/0.60/0.75, with λ from out-of-fold rows and zero
+   test-set choices. It matches the hand-picked 12-run blend (0.7896) and beats the best single
+   seed (0.7743) without the seed lottery.
+2. **The prior rule is not a free +3 points.** At cohort scale: +1.9 (cand), −0.2 (ctl). It buys
+   grade 1 (recall 0.50 → 0.86) and spends grade 2 (0.74 → 0.60) — it slides the operating point
+   along the grade 1/2 boundary and adds no information (AUROC 0.9528 → 0.9478). Whether that trade
+   is the right one is clinical, not a metric question. Not yet paired-tested: the paired block
+   compares recipes, not decision rules.
+
+Reproduce: `REPORT_JOB_NAME=brc-grading-oof-final REPORT_SCRIPT=ensemble_variants.py
+REPORT_VARIANTS=kf0-ctl,...,kf4-cand REPORT_ARGS='--oof --train-counts 575,67,247,286'
+uv run --no-sync python scripts/run_report.py`. The prior must come from the fold CSVs
+(`<project>/kfold/labels-kf{K}.csv` → 575,67,247,286 ±1 slide per fold), not the shipped 1175.
