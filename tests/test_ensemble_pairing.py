@@ -117,3 +117,17 @@ for _row in _rows:  # every slide is exactly one of the three outcomes, at any l
 assert _rows[0]["balanced_accuracy"] == 1.0, _rows[0]  # lambda 0 = the raw argmax, which is right here
 
 print("ok: direction counts undercalls separately and the ladder keeps its invariants")
+
+# --- rule_pairing: the flip's direction is the point, not the accuracy difference ---
+_raw = np.eye(4)[_labels]  # lambda 0: everything right
+_shifted = np.eye(4)[np.array([0, 0, 2, 3])]  # the rule pushes the class-1 slide down
+_captured = io.StringIO()
+with contextlib.redirect_stdout(_captured):
+    ensemble_variants.rule_pairing("pairing", _raw, _shifted, _labels)
+_line = _captured.getvalue().strip()
+assert "accuracy 1.0000 vs 0.7500" in _line, _line
+assert "discordant 1/0" in _line, _line
+assert "flips into undercall 1, out of undercall 0" in _line, _line
+assert "under calls 0 vs 1" in _line, _line
+
+print("ok: rule pairing counts discordant slides and the direction of each flip")

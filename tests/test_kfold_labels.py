@@ -190,6 +190,7 @@ assert f"pooled out-of-fold over {FOLDS_FOR_DUMP} folds" in report, report
 assert f"{FOLDS_FOR_DUMP}-fold average on test" in report, report
 assert "no rule" in report and "+ rule" in report, report
 assert "confusion" in report and "undercalled per class" in report, "the error trade must print"
+assert "rule pairing" in report, "the lambda decision needs its paired test"
 assert "lambda ladder" in report, "the rule's trade must be shown, not only fitted"
 # Every fold's model predicts the held-out and test slides correctly here, so all five score
 # lines must be perfect; if this ever drops, the pooling is losing or duplicating rows.
@@ -240,7 +241,10 @@ paired_scores = [
 ]
 assert len(paired_scores) == 2, report
 assert max(paired_scores) == 1.0 and min(paired_scores) < 0.6, paired_scores
-lines = [line for line in report.splitlines() if "McNemar" in line]
+lines = [
+    line for line in report.splitlines()
+    if "McNemar" in line and "pairing" not in line  # the lambda pairing prints its own
+]
 assert len(lines) == 1 and "paired per-slide comparison on 12" in report, lines
 assert float(lines[0].split("p=")[1]) < 0.01, f"a hopeless recipe must not tie: {lines[0]}"
 assert "bad by -" in lines[0], f"the sign must read as ctl winning: {lines[0]}"

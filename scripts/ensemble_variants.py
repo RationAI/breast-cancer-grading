@@ -328,6 +328,30 @@ def lambda_ladder(
     return rows
 
 
+def rule_pairing(name: str, raw: np.ndarray, corrected: np.ndarray, labels: np.ndarray) -> None:
+    """Pair the two operating points slide by slide: right one way, wrong the other.
+
+    Two balanced accuracies 2 points apart are inside the ruler, so the number that decides is the
+    discordant pair count on the same slides. Counted alongside is *which way a flip goes*, because
+    McNemar on accuracy cannot see a slide moving from "correct" to "read one grade too low", which
+    is the whole content of the lambda decision.
+    """
+    first, second = raw.argmax(1), corrected.argmax(1)
+    right_first, right_second = first == labels, second == labels
+    only_first = int((right_first & ~right_second).sum())
+    only_second = int((right_second & ~right_first).sum())
+    split = only_first + only_second
+    p = binomtest(max(only_first, only_second), split, 0.5).pvalue if split else 1.0
+    into_under = int(((first >= labels) & (second < labels)).sum())
+    out_of_under = int(((first < labels) & (second >= labels)).sum())
+    print(
+        f"  {name}: accuracy {right_first.mean():.4f} vs {right_second.mean():.4f} on "
+        f"{len(labels)} slides, discordant {only_first}/{only_second}, McNemar p={p:.4f}; "
+        f"flips into undercall {into_under}, out of undercall {out_of_under} "
+        f"(under calls {int((first < labels).sum())} vs {int((second < labels).sum())})"
+    )
+
+
 def _fold_recipe(variant: str) -> tuple[str, str]:
     """``kf3-ctl`` is fold ``kf3`` of recipe ``ctl``.
 
@@ -410,6 +434,12 @@ def pooled_oof(
         print(f"{tag}error direction out-of-fold, no rule: {direction(scores.argmax(1), labels)}")
         print(f"{tag}error direction out-of-fold, + rule:   {direction(corrected.argmax(1), labels)}")
         lambda_ladder(scores, labels, prior)
+        rule_pairing(
+            f"{tag}rule pairing out-of-fold, lambda 0 vs fitted leave-one-fold-out",
+            scores,
+            corrected,
+            labels,
+        )
 
         per_fold = []
         for fold in np.unique(folds):
@@ -446,6 +476,13 @@ def pooled_oof(
             auroc_from=average,
         )
         print(f"{tag}error direction on test, + rule: {direction(shipped.argmax(1), labels_t)}")
+        rule_pairing(
+            f"{tag}rule pairing on test, lambda 0 vs lambda {lam:.1f} (fitted out-of-fold, "
+            "reported once)",
+            average,
+            shipped,
+            labels_t,
+        )
 
     if len(recipes) > 1:
         # Same slides, same rule-fitting protocol, so the fold spread cancels: this is the only
