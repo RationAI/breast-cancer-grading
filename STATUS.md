@@ -165,8 +165,8 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
 ```
 
 - Output: `/mnt/projects/breast_cancer/brc_grading/masks/<split>/{<slide>.tiff, attention_scores.csv,
-  summary.csv}` (≈350 MB per slide — every slide in this estate is ~105 000 × 220 000 px — so ~90 GB for
-  the 266 test slides; the PVC had 609 TB free when measured).
+  summary.csv}` (**measured 428–471 MB per slide** — every slide in this estate is ~105 000 × 220 000 px — so ~117 GB
+  for the 266 test slides; the PVC had 609 TB free when measured).
 - **Resumable**: existing masks and `score_cache/` (keyed by parquet bytes + which weights) are skipped,
   so a resubmit continues. Measured 2.4 min per slide on the 8-CPU pod (every slide here is ~23 Gpx at
   level 0, and most of that is LZW encoding 99 % background) -> **~10.5 h for the 266 test slides**.
