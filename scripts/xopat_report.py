@@ -1,10 +1,11 @@
 """Build the xOpat overlay report: heatmaps + the per-slide numbers, in one HTML page.
 
 Replaces the `report` (Hydra) gallery, which drew the masks with hard colour
-thresholds and could not show any per-slide numbers. This version renders the
-mask as an xOpat **heatmap** layer (`rationai.reporting.viewer_url` default) and
-puts `summary.csv` next to every thumbnail: truth, prediction with its
-probability, tiles, and how focused the bag was.
+thresholds and could not show any per-slide numbers. This version puts
+`summary.csv` next to every thumbnail (truth, prediction with its probability,
+tiles, how focused the bag was) and links the WSI with the mask as a layer:
+`--shader grey` (default) for a translucent black -> white brightness ramp at
+`--opacity`, `--shader heatmap` for xOpat's coloured heatmap.
 
 Run it as a job (the PVC and MLflow are only reachable in the cluster)::
 

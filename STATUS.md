@@ -175,6 +175,20 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
   sequential per slide. Actual wall time for all 266: **8.8 h** (2.0 min/slide), not the 10.5 h estimated.
 - Values are an **absolute** scale so a colour means the same on every slide: 0 = no tile, 1 = an equal
   share of that slide's attention, 128 = 10x, 255 = 100x or more. Pale = the head did not focus.
+- **`--scale log|pct|sqrt`** — `log` is the absolute scale above; `pct` and `sqrt` normalise **per slide**
+  (255 = that slide's brightest tile) so the ramp uses the whole range. Measured over 2 M tiles of the test
+  split (`p5 / p50 / p90 / p99`): `log` = 1 / 1 / 46 / 109 with **71 % of tiles sitting on the floor value 1**,
+  `pct` = 0 / **6** / 48 / 99, `sqrt` = 10 / **41** / 110 / 159. A slide's brightest tile is **median 22x, p95
+  107x, max 278x** an equal share (`max_weight x n_tiles`, 266 rows), so literal linear `pct` leaves the median
+  tile black and shows only peaks — **`sqrt` is the one that reads as a whole translucent field**. (The `log`
+  scale caps at 126x, so the handful of sharper slides clip at white; `max_weight` is the exact number.) A new scale needs a fresh `--mask-dir`
+  (stage 2 skips existing TIFFs); the score cache is shared, so re-encoding costs TIFF time only (~2 min/slide).
+  `masks_sqrt/test` + `masks_pct/test` hold 4 comparison slides each.
+- Two bugs this surfaced, both fixed: the score-cache **resume** path read `z["y"]` while `savez` wrote the
+  keyword `ys`, so *any* rerun over cached slides died with `KeyError` on slide 1 (the first run only wrote
+  them); and `stage_report` named the reporter YAML after the mask dir's **leaf** (`.../test`), so a 4-slide
+  sample in `masks_sqrt/test` overwrote the 266-slide `attention_test.yaml` — the name now includes the parent
+  dir, and the split's YAML was regenerated (`--stage report`, 266 slides).
 - Verified on the job's own output: 12-level pyramid, level-0 dims equal the slide's, and the mask value at
   `(2x, 2y)` equals the `attention_scores.csv` value for the same tile. **Registration tested**: tile rects
   built from the coordinates sit on tissue 49.8 % of the time vs 1.3-3.8 % for the same rects shifted
@@ -196,18 +210,29 @@ All **266/266 test masks are done** (job ran 21:45 -> 06:31 = 8.8 h, 98 GB on th
 report from whatever masks are on the PVC — no model, no GPU, **40 s**:
 
 ```bash
-REPORT_JOB_NAME=brc-grading-report-heatmap4 REPORT_SCRIPT=xopat_report.py \
+REPORT_JOB_NAME=brc-grading-report-grey REPORT_SCRIPT=xopat_report.py \
   uv run --no-sync python scripts/run_report.py          # no --user/--regen: those were v1 flags
-kubectl logs -n rationai-jobs-ns job/brc-grading-report-heatmap4-jiri-buchta
+kubectl logs -n rationai-jobs-ns job/brc-grading-report-grey-jiri-buchta
 ```
 
-- Output: `reports/<split>_heatmap.html` (1.55 MB, 266 cards) on the PVC **plus** an MLflow run holding the same
-  file as an artifact. Current run `4cf76dc4079a4849a34eef2923815032`, metric `slides=266`, artifact
-  `test_heatmap.html` (downloaded back at the same 1 587 266 bytes to prove it). It re-prints
-  **accuracy 0.8534 on these 266 slides**, so the page is built from the same numbers as the shipped table.
+- Output: `reports/<split>_<shader>[<scale>].html` on the PVC **plus** an MLflow run holding the same file as an
+  artifact. `test_grey.html` is now the default (266 cards, run `c5ec7072c0d5444fbaed9bc158e44bc5`);
+  `test_heatmap.html` (run `4cf76dc4079a4849a34eef2923815032`) is the same page with xOpat's coloured heatmap —
+  its artifact was downloaded back at the same 1 587 266 bytes to prove the upload. Both re-print
+  **accuracy 0.8534 on these 266 slides**, so they are built from the same numbers as the shipped table.
+  `--self-test` renders two fake rows and asserts both shaders, the ordering and the mount-relative paths.
 - Each card: the slide's truth/prediction/probabilities and `eff_tiles` from `summary.csv`, next to an xOpat
-  deep link that opens the WSI with the attention mask as a **heatmap** layer (`rationai.reporting.viewer_url`).
-  `--self-test` renders two fake rows and asserts the pieces (266-card page, heatmap shader, ordering).
+  deep link for the WSI with the mask as a layer.
+- **`--shader grey` (default) draws the mask as a translucent black -> white ramp**: `shader_conf` on the layer
+  (`type: colormap`, `params.opacity` from `--opacity` (0.5), 7-stop grey ramp, and `threshold.breaks[0]` at
+  1/255 with `mask[0] = 0` so **value 0 stays transparent** and the tissue shows through). Only keys the
+  reviewed Tile-Morph LDA config uses. `--shader heatmap` is xOpat's built-in coloured heatmap (what
+  `test_heatmap.html` links carry). Verified by decoding a link out of the written HTML:
+  `opacity 0.5`, `mask [0,1,1,1,1,1,1]`, colours `'' -> #333 -> ... -> #ffffff`.
+- **`--scale log|pct|sqrt`** here only picks the legend sentence on the page, so it must match how the masks in
+  `--masks-dir` were encoded. Output name follows the knobs: `test_grey.html` (log), `test_greysqrt.html`,
+  `test_heatmap.html` (heatmap+log). Current pages on the PVC: `test_grey.html` (266 slides, MLflow run
+  `c5ec7072c0d5444fbaed9bc158e44bc5`), plus 4-slide `test_greysqrt.html` / `test_greypct.html` (`--no-mlflow`).
 - **Which MLflow** (three candidates, only one is right): jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow`
   from the `default-envs` configmap, and the graded MIL runs are in its experiment **82 `BRC Grading`** (96 runs,
   40 with `test/kappa`) — `EXPERIMENT` in the script is that name, so the report run lands **next to the runs it
