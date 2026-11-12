@@ -234,9 +234,10 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-report-grey-jiri-buchta
   `sort`, `masks_dir`) and ships `summary.csv` beside the HTML. Report runs in exp 82, verified via `MlflowClient`:
   **`c9c975a3`** `test_grey` (266, log, black floor — use this one; `c5ec7072` at 12:52 is the same filename with
   the old *transparent* floor, superseded), **`4bcc7bbe`** `test_greysqrt` (4 slides), **`22b8b66e`**
-  `test_greypct` (4 slides), `4cf76dc4` `test_heatmap` (266). The full 266-slide **sqrt** TIFFs are encoding in
-  `masks_sqrt/test/` (job `brc-grading-masks-sqrt`, ~1 slide/min) — rebuild the page over them when it finishes
-  with `--masks-dir .../masks_sqrt/test --scale sqrt`.
+  `test_greypct` (4 slides), `4cf76dc4` `test_heatmap` (266). The full-266 sqrt re-encode was **stopped at
+  13/266** — the verdict is that the log-scale `test_grey.html` (`c9c975a3`) is the wanted look. `masks_sqrt/test`
+  (13 + 4 slides) stays on the PVC and is resumable if that ever changes: scores are cached, so re-running is
+  TIFF-writing time only (`--scale sqrt --mask-dir .../masks_sqrt/test`).
 - **Which MLflow** (three candidates, only one is right): jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow`
   from the `default-envs` configmap, and the graded MIL runs are in its experiment **82 `BRC Grading`** (96 runs,
   40 with `test/kappa`) — `EXPERIMENT` in the script is that name, so the report run lands **next to the runs it
