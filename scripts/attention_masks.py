@@ -12,8 +12,8 @@ blocks are laid down on a level-1 raster and the raster is upscaled 2x with
 pixel replication, which is byte-identical to drawing at level 0 for a quarter
 of the memory (same trick as make_mask_tiff.py).
 
-Value encoding (repeated in the report YAML) -- one absolute scale for all
-slides, so a colour means the same thing on every slide:
+Value encoding (repeated in the report YAML) -- ``--scale log`` (default) is one
+absolute scale for all slides, so a colour means the same thing on every slide:
     0     no tile here (background / QC-filtered)
     1     the tile got exactly an equal share (1/N) of the slide's attention
     128   10x an equal share
@@ -21,6 +21,9 @@ slides, so a colour means the same thing on every slide:
 i.e. value = decades of attention above an equal share. A slide where nothing
 stands out therefore stays pale, which is the point: how FOCUSED a slide was is
 in summary.csv as eff_tiles = 1/sum(w^2).
+``--scale pct|sqrt`` normalises per slide instead (255 = that slide's brightest
+tile), which uses the full range and reads as a brightness ramp; it costs the
+cross-slide comparability, so it is a second view rather than a replacement.
 
 Usage (cluster):
     python scripts/attention_masks.py --split test --stage all --limit 3   # smoke test
@@ -103,17 +106,31 @@ def participation(weight: np.ndarray) -> float:
     return float(1.0 / max(float((weight ** 2).sum()), 1e-12))
 
 
-def encode_values(w: np.ndarray) -> np.ndarray:
-    """Attention weights -> uint8 mask values (0 = no tile, 255 = 100x an equal share).
+def encode_values(w: np.ndarray, scale: str = "log") -> np.ndarray:
+    """Attention weights -> uint8 mask values. 0 always means "no tile here".
 
-    Absolute scale, identical on every slide: value = decades of attention above
-    an equal share (1/N), so 1 = an average tile, 128 = 10x, 255 = 100x or more.
+    log  (absolute, one meaning on every slide): decades of attention above an
+         equal share (1/N) -- 1 = an average tile, 128 = 10x, 255 = 100x or more.
+         A slide where nothing stands out stays pale, which is the point.
+    pct  (per slide): 255 = this slide's brightest tile, linear in attention.
+    sqrt (per slide): same, square-root compressed. Measured on the test split the
+         brightest tile is only 22x an equal share (p50, p95 107x), so `pct` leaves
+         the average tile at ~12/255 -- a black field with a few peaks -- while
+         sqrt puts it near 55/255: still monotone in attention, but the field shows.
     """
     n = len(w)
     if n == 0:
         return np.zeros(0, dtype=np.uint8)
-    r = np.where(w > 0, np.log10(np.maximum(w, 1e-12) * n), -np.inf)  # decades above an equal share
-    return np.where(w > 0, 1 + np.round(254.0 * np.clip(r / 2.0, 0.0, 1.0)), 0).astype(np.uint8)
+    if scale == "log":
+        r = np.where(w > 0, np.log10(np.maximum(w, 1e-12) * n), -np.inf)  # decades above an equal share
+        return np.where(w > 0, 1 + np.round(254.0 * np.clip(r / 2.0, 0.0, 1.0)), 0).astype(np.uint8)
+    top = float(w.max())
+    if top <= 0:
+        return np.zeros(n, dtype=np.uint8)
+    v = np.clip(w / top, 0.0, 1.0)
+    if scale == "sqrt":
+        v = np.sqrt(v)
+    return np.rint(255.0 * v).astype(np.uint8)
 
 
 def stage_scores(args, sel, emb_dir):
@@ -149,7 +166,7 @@ def stage_scores(args, sel, emb_dir):
                        "eff_tiles": round(participation(w), 1),
                        "probs": json.dumps([round(float(v), 4) for v in probs])})
         tiles.append(pd.DataFrame({"slide_name": row.slide_id, "x": xs, "y": ys,
-                                   "value": encode_values(w)}))
+                                   "value": encode_values(w, args.scale)}))
         if i % 25 == 0:
             print(f"[stage1] {i}/{len(sel)} slides", flush=True)
     out = Path(args.mask_dir)
@@ -160,6 +177,10 @@ def stage_scores(args, sel, emb_dir):
     summary.to_csv(out / "summary.csv", index=False)
     print(f"[stage1] {len(tile_df)} tile rows, accuracy {summary.correct.mean():.4f} "
           f"on {len(summary)} slides -> {out/'attention_scores.csv'}", flush=True)
+    print(f"[stage1] scale={args.scale} tile-value percentiles: "
+          + " ".join(f"p{p:g}={v:.0f}" for p, v in
+                     zip((5, 50, 90, 99), np.percentile(tile_df.value, (5, 50, 90, 99)),
+                         strict=True)), flush=True)
     return tile_df, summary
 
 
@@ -219,15 +240,25 @@ def stage_report(args, summary, sel):
         raise SystemExit(f"no masks in {out_dir}")
     rows = [r for r in sel.itertuples() if r.slide_id in have]
     paths = "\n".join(f"    - {r.path}" for r in rows)
+    legend = {
+        "log": "#   0    = no tile here (background / QC-filtered)\n"
+               "#   1    = an equal share of this slide's attention (1/N)\n"
+               "#   128  = 10x an equal share\n"
+               "#   255  = 100x an equal share or more\n"
+               "# One absolute scale for every slide, so a colour means the same thing everywhere;\n"
+               "# a pale slide is one where the grade head did not focus anywhere in particular.",
+        "pct": "#   0    = no tile here, or under 0.2% of this slide's brightest tile\n"
+               "#   255  = this slide's brightest tile, linear in attention in between\n"
+               "# Brightness means the same only WITHIN a slide; compare slides with eff_tiles.",
+        "sqrt": "#   0    = no tile here\n"
+                "#   255  = this slide's brightest tile, sqrt-compressed so an average tile is\n"
+                "#   ~55 rather than ~12 (the peak is only ~22x an equal share, p50)\n"
+                "# Brightness means the same only WITHIN a slide; compare slides with eff_tiles.",
+    }[args.scale]
     cfg = f"""# xOpat report: MIL attention masks (fold-averaged attention, {len(rows)} slides)
 #
-# Masks are uint8 grayscale (0-255):
-#   0    = no tile here (background / QC-filtered)
-#   1    = an equal share of this slide's attention (1/N)
-#   128  = 10x an equal share
-#   255  = 100x an equal share or more
-# One absolute scale for every slide, so a colour means the same thing everywhere;
-# a pale slide is one where the grade head did not focus anywhere in particular.
+# Masks are uint8 grayscale (0-255), scale={args.scale}:
+{legend}
 # Focus per slide (eff_tiles = 1/sum(w^2)) is in summary.csv next to the masks.
 # Caveat (REPORT.md 10): these weights are verified not-degenerate, but a
 # tumour-vs-stroma contrast of 0.48 AUC means we cannot claim they mark tumour.
@@ -323,6 +354,10 @@ def main():
     ap.add_argument("--cache-dir", default=None, help="per-slide score cache (default <root>/score_cache)")
     ap.add_argument("--dropout", type=float, default=0.2, help="must match the shipped recipe")
     ap.add_argument("--stage", choices=["scores", "masks", "report", "all"], default="all")
+    ap.add_argument("--scale", choices=["log", "pct", "sqrt"], default="log",
+                    help="log = absolute (comparable across slides); pct/sqrt = per slide, 255 is that "
+                         "slide's brightest tile. A new scale needs a fresh --mask-dir: stage 2 skips "
+                         "TIFFs that already exist.")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--slides", default=None, help="comma-separated slide ids (overrides --split/--limit)")
     ap.add_argument("--selftest", action="store_true")
@@ -343,6 +378,12 @@ def main():
         assert np.all(np.diff(ramp) > 0), ramp               # strictly increasing while unsaturated
         assert np.all(np.diff(encode_values(np.array([1e-6, 1e-4, 1e-2, 0.5]))) >= 0)  # never decreases
         assert encode_values(np.zeros(0)).size == 0
+        for s in ("pct", "sqrt"):                       # relative scales: 0 = nothing, 255 = the peak
+            e = encode_values(np.array([0.0, 0.01, 0.02, 1.0]), s)
+            assert e[0] == 0 and e[3] == 255 and e[1] < e[2] < e[3], (s, e)
+            assert encode_values(np.zeros(5), s).max() == 0, s
+            assert np.all(np.diff(encode_values(np.geomspace(1e-6, 1.0, 64), s)) >= 0), s
+            assert encode_values(np.full(8, 0.25), s).max() == 255, s   # flat bag -> no black peaks
         print("selftest ok", v.tolist(), ramp.tolist())
         return
 

@@ -42,18 +42,74 @@ DEFAULT_ROOT = Path("/mnt/projects/breast_cancer/brc_grading")
 # "Breast Cancer Grading" (37) is a metric-less SDK-boilerplate experiment, and the
 # vendored `report` app's 107 sits on a third server entirely.
 EXPERIMENT = "BRC Grading"
-MLFLOW_UI = "http://mlflow.rationai-mlflow:5000/#/experiments/107"
+MLFLOW_UI = "http://mlflow-s3.rationai-mlflow/#/experiments/82"
 CLASSES = 4
 
-CAVEAT = (
+TUMOUR_CAVEAT = (
     "The overlay is where the grade head *looked*, not where the tumour is: the "
-    "tumour-vs-stroma contrast measured 0.48 AUC (below chance, REPORT.md §10), so "
-    "read the colour as attention share. Brightness is one absolute scale for every "
-    "slide: the mask stores 0 = no tile, 1 = an equal share of that slide's attention "
-    "(1/N), 128 = 10x that share, 255 = 100x or more. `eff_tiles` (= 1/sum(w²)) is how "
-    "many tiles the bag effectively spent its attention on: ~N means it looked "
-    "everywhere, a few hundred means it committed to a spot."
+    "tumour-vs-stroma contrast measured 0.48 AUC (below chance, REPORT.md §10). "
 )
+
+# One line per mask value scale (see attention_masks.py --scale), so the page never
+# explains a ramp the TIFFs do not use.
+BRIGHTNESS = {
+    "log": "Brightness is one absolute scale for every slide: the mask stores 0 = no tile, "
+           "1 = an equal share of that slide's attention (1/N), 128 = 10x that share, "
+           "255 = 100x or more.",
+    "pct": "Brightness is per slide: nothing (or under 0.2% of the peak) is clear, the "
+           "brightest tile of that slide is full white, linear in attention in between. "
+           "Compare slides by `eff_tiles`, not by colour.",
+    "sqrt": "Brightness is per slide, square-root compressed: clear where there is no tile, "
+            "full white at that slide's brightest tile, an average tile around 20% grey. "
+            "Compare slides by `eff_tiles`, not by colour.",
+}
+
+CAVEAT = TUMOUR_CAVEAT + BRIGHTNESS["log"] + (
+    " `eff_tiles` (= 1/sum(w²)) is how many tiles the bag effectively spent its "
+    "attention on: ~N means it looked everywhere, a few hundred means it committed to a spot."
+)
+
+# xOpat `colormap` shader: value 0 hidden, then a black -> white ramp, drawn at a
+# partial opacity so the tissue underneath stays visible. Only the keys Tile-Morph's
+# reviewed LDA config is known to work with (breaks = fraction of 255, one colour per
+# bin, mask 0 hides a bin).
+GREY_RAMP = ["", "#333333", "#555555", "#777777", "#999999", "#bbbbbb", "#ffffff"]
+
+
+def grey_shader(opacity: float) -> dict:
+    """Translucent black -> white brightness overlay for the mask layer."""
+    n = len(GREY_RAMP) - 1                       # bins above the hidden background
+    return {
+        "type": "colormap",
+        "params": {
+            "use_channel0": "r",
+            "opacity": opacity,
+            "color": {
+                "type": "custom_colormap",
+                "default": GREY_RAMP,
+                "steps": len(GREY_RAMP),
+                "mode": "qualitative",
+                "interactive": True,
+                "title": "Attention:",
+                "continuous": False,
+            },
+            "threshold": {
+                "breaks": [1 / 255] + [i / n for i in range(1, n)],
+                "mask": [0] + [1] * n,
+                "interactive": False,
+                "inverted": True,
+                "maskOnly": True,
+                "toggleMask": True,
+                "title": "Attention:",
+                "min": 0,
+                "max": 1,
+                "minGap": 0.05,
+                "step": None,
+                "pips": {"mode": "count", "values": len(GREY_RAMP), "density": len(GREY_RAMP),
+                         "stepped": True},
+            },
+        },
+    }
 
 
 def load_rows(root: Path, mask_dir: Path) -> pd.DataFrame:
@@ -130,7 +186,8 @@ def card_metrics(row: pd.Series) -> dict[str, list]:
     }
 
 
-def build_page(rows: pd.DataFrame, mask_dir: Path, title: str) -> object:
+def build_page(rows: pd.DataFrame, mask_dir: Path, title: str, *, shader: dict | None = None,
+               scale: str = "log") -> object:
     from fasthtml.common import P
     from rationai.reporting import (
         Report,
@@ -147,7 +204,8 @@ def build_page(rows: pd.DataFrame, mask_dir: Path, title: str) -> object:
 
     slides = attach_layers(
         slides_from_paths(rows.path.tolist(), layer_name="WSI (Mirax)"),
-        layers_from_disk(mask_dir, globs=("*.tiff",), layer_name="Attention"),
+        layers_from_disk(mask_dir, globs=("*.tiff",), layer_name="Attention",
+                         shader_conf=shader or {}),
     )
     by_name = {s["name"]: s for s in slides}
     cards = []
@@ -163,7 +221,11 @@ def build_page(rows: pd.DataFrame, mask_dir: Path, title: str) -> object:
         "Overlay report",
         ReportHeader(title, RunList(runs)),
         SummaryTable(global_metrics(rows), title="Cohort and agreement"),
-        ReportSection("How to read the overlay", P(CAVEAT)),
+        ReportSection("How to read the overlay",
+                      P(TUMOUR_CAVEAT + BRIGHTNESS[scale] +
+                        " `eff_tiles` (= 1/sum(w²)) is how many tiles the bag effectively spent "
+                        "its attention on: ~N means it looked everywhere, a few hundred means it "
+                        "committed to a spot.")),
         ReportSection(f"Slides ({len(cards)}) — worst-agreement first", ReportGrid(*cards)),
         title=title,
     )
@@ -233,11 +295,17 @@ def self_test() -> int:
     rows = sort_rows(load_rows(root, mask_dir), "wrong-first")
     assert rows.slide_name.tolist() == ["slideB-2-N", "slideA-1-T"], rows.slide_name.tolist()
     page = build_page(rows, mask_dir, "selftest")
+    grey = build_page(rows, mask_dir, "selftest-grey", shader=grey_shader(0.5), scale="sqrt")
     from fasthtml.common import to_xml
 
     html = to_xml(page)
     assert "slideB-2-N" in html and "slideA-1-T" in html
     assert "heatmap" in html, "overlay must be a heatmap layer"
+    ghtml = to_xml(grey)
+    assert "colormap" in ghtml, "grey shader must reach the link"
+    assert "opacity" in ghtml and "custom_colormap" in ghtml, "opacity + ramp must reach the link"
+    assert "%23ffffff" in ghtml and "%23333333" in ghtml, "black -> white ramp (quote() escapes #)"
+    assert "sqrt" in ghtml.lower() or "brightest tile" in ghtml, "legend must match the scale"
     assert "bioptic_tree/2020/01/002/slideB-2-N/slideB-2-N.mrxs" in html  # mount-relative
     assert "masks/test/slideB-2-N.tiff" in html
     assert "0.350 / 0.600" in html, "per-slide probabilities from summary.csv"
@@ -257,6 +325,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--sort", choices=["wrong-first", "eff-desc", "name"], default="wrong-first")
+    ap.add_argument("--shader", choices=["grey", "heatmap"], default="grey",
+                    help="grey = translucent black->white ramp; heatmap = xOpat's built-in colours")
+    ap.add_argument("--opacity", type=float, default=0.5, help="layer opacity for --shader grey")
+    ap.add_argument("--scale", choices=["log", "pct", "sqrt"], default="log",
+                    help="how the masks in --masks-dir were encoded; only changes the legend")
     ap.add_argument("--no-mlflow", action="store_true", help="Write the HTML only.")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
@@ -270,11 +343,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit:
         rows = rows.head(args.limit)
     title = f"Breast cancer Nottingham grade — MIL attention ({args.split}, {len(rows)} slides)"
-    page = build_page(rows, mask_dir, title)
+    shader = grey_shader(args.opacity) if args.shader == "grey" else None
+    page = build_page(rows, mask_dir, title, shader=shader, scale=args.scale)
 
     from fasthtml.common import to_xml
 
-    out = args.out or args.root / "reports" / f"{args.split}_heatmap.html"
+    out = args.out or args.root / "reports" / (
+        f"{args.split}_{args.shader}.html" if args.scale == "log"
+        else f"{args.split}_{args.shader}{args.scale}.html")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(to_xml(page), encoding="utf-8")
     print(f"wrote {out} ({out.stat().st_size // 1024} KB, {len(rows)} slides)")
