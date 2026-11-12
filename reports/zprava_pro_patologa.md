@@ -14,8 +14,14 @@ na celých slidech. Model pracuje se 4 třídami:
 | **G2** | grade 2 |
 | **G3** | grade 3 |
 
-Na testovací sadě **266 preparátů** (nikdy je model při tréninku neviděl) dosahuje
-**přesnosti 85,3 %**. Na každém preparátu model vrací pravděpodobnosti všech čtyř tříd.
+Na testovací sadě **266 preparátů** (nikdy je model při tréninku neviděl) určí správnou
+třídu u **85,3 %** preparátů. Pozor na tohle číslo: sada obsahuje **131 preparátů bez tumoru**,
+které model téměř vždy pozná (99 %), a ty ho vytahují nahoru. Na **135 preparátech s tumorem**
+určí správný grade v **72 %** — po třídách: **G1 50 %, G2 74 %, G3 75 %**. Chyby jsou
+téměř výhradně mezi sousedními grades. (V interních materiálech projektu se uvádí i „balanced
+accuracy“ 0,74 — průměr úspěšnosti po jednotlivých třídách, kde vzácná třída G1 má stejnou
+váhu jako častá třída N; proto se jinde můžete setkat s nižším číslem.) Na každém preparátu
+model vrací pravděpodobnosti všech čtyř tříd.
 
 ## Jak číst overlay v prohlížeči xOpat
 
@@ -97,9 +103,10 @@ díval — jestli to je např. běžný epitel, nebo něco, co vypadá jako grad
 | **G2** | 0 | 9 | **43** | 6 |
 | **G3** | 1 | 0 | 15 | **47** |
 
-Přehledně: negativa model téměř nikdy nezaměnil (131/133). Chyby se téměř
-výhradně dějí **mezi sousedními grades** (G2↔G1, G2↔G3); skok přes dva grades
-je vzácný (4 případy výše v §1).
+Přehledně po třídách: **N 130/131 (99 %), G1 7/14 (50 %), G2 43/58 (74 %), G3 47/63 (75 %)**.
+Chyby se téměř výhradně dějí **mezi sousedními grades** (G2↔G1, G2↔G3); skok přes dva grades
+je vzácný (4 případy výše v §1). Podhodnocení (model dal nižší grade, než je pravda):
+**25 preparátů (9,4 %)**, nadhodnocení: 14 preparátů.
 
 ## Kde preparáty najít
 
