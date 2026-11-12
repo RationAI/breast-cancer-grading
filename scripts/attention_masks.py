@@ -151,13 +151,17 @@ def stage_scores(args, sel, emb_dir):
         cache = cache_dir / f"{row.slide_id}__{st.st_size}__{int(st.st_mtime)}__{tag}.npz"
         if cache.exists():
             z = np.load(cache)
-            w, probs, xs, ys = z["w"], z["probs"], z["x"], z["y"]
+            # savez(...) keyword names, and the resume path has to match what is already
+            # on disk: caches written before 2026-11-12 stored the y column as "ys", so
+            # a plain z["y"] made every resubmit die with KeyError on the first slide.
+            w, probs, xs = z["w"], z["probs"], z["x"]
+            ys = z["ys"] if "ys" in z else z["y"]
         else:
             bag = pd.read_parquet(src, columns=["x", "y", "embedding"])
             xs, ys = bag.x.to_numpy(), bag.y.to_numpy()
             probs, w = score_bag(models, np.stack(bag.embedding.values))
             del bag
-            np.savez_compressed(cache, w=w, probs=probs, x=xs, ys=ys)
+            np.savez_compressed(cache, w=w, probs=probs, x=xs, y=ys)
         p = int(probs.argmax())
         t = int(row.grade)
         slides.append({"slide_name": row.slide_id, "case": row.case, "truth": t, "pred": p,
