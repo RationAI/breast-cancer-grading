@@ -57,11 +57,11 @@ BRIGHTNESS = {
     "log": "Brightness is one absolute scale for every slide: the mask stores 0 = no tile, "
            "1 = an equal share of that slide's attention (1/N), 128 = 10x that share, "
            "255 = 100x or more.",
-    "pct": "Brightness is per slide: nothing (or under 0.2% of the peak) is clear, the "
-           "brightest tile of that slide is full white, linear in attention in between. "
-           "Compare slides by `eff_tiles`, not by colour.",
-    "sqrt": "Brightness is per slide, square-root compressed: clear where there is no tile, "
-            "full white at that slide's brightest tile, an average tile around 20% grey. "
+    "pct": "Brightness is per slide: black is where the model does not look (no tile, or under "
+           "0.2% of the peak), white is that slide's brightest tile, linear in attention in "
+           "between. Compare slides by `eff_tiles`, not by colour.",
+    "sqrt": "Brightness is per slide, square-root compressed: black is where the model does not "
+            "look, white is that slide's brightest tile, an average tile around 20% grey. "
             "Compare slides by `eff_tiles`, not by colour.",
 }
 
@@ -70,16 +70,18 @@ CAVEAT = TUMOUR_CAVEAT + BRIGHTNESS["log"] + (
     "attention on: ~N means it looked everywhere, a few hundred means it committed to a spot."
 )
 
-# xOpat `colormap` shader: value 0 hidden, then a black -> white ramp, drawn at a
-# partial opacity so the tissue underneath stays visible. Only the keys Tile-Morph's
-# reviewed LDA config is known to work with (breaks = fraction of 255, one colour per
-# bin, mask 0 hides a bin).
-GREY_RAMP = ["", "#333333", "#555555", "#777777", "#999999", "#bbbbbb", "#ffffff"]
+# xOpat `colormap` shader: a black -> white brightness ramp over the whole slide, drawn
+# at a partial opacity so the tissue underneath stays visible. Value 0 (no tile) is the
+# black end, NOT transparent -- the ask was "black where it does not look, up to white at
+# what it looks at", and a transparent floor just leaves the slide showing through. Only
+# the keys Tile-Morph's reviewed LDA config is known to work with (breaks = fraction of
+# 255, one colour per bin).
+GREY_RAMP = ["#000000", "#333333", "#555555", "#777777", "#999999", "#bbbbbb", "#ffffff"]
 
 
 def grey_shader(opacity: float) -> dict:
     """Translucent black -> white brightness overlay for the mask layer."""
-    n = len(GREY_RAMP) - 1                       # bins above the hidden background
+    n = len(GREY_RAMP) - 1                       # bins above the black floor
     return {
         "type": "colormap",
         "params": {
@@ -96,7 +98,7 @@ def grey_shader(opacity: float) -> dict:
             },
             "threshold": {
                 "breaks": [1 / 255] + [i / n for i in range(1, n)],
-                "mask": [0] + [1] * n,
+                "mask": [1] * len(GREY_RAMP),
                 "interactive": False,
                 "inverted": True,
                 "maskOnly": True,
@@ -232,15 +234,18 @@ def build_page(rows: pd.DataFrame, mask_dir: Path, title: str, *, shader: dict |
     )
 
 
-def upload(html_path: Path, split: str, n_slides: int) -> str:
-    """Log the page (and the CSV it was built from) to MLflow, next to the runs."""
+def upload(html_path: Path, summary_csv: Path, split: str, n_slides: int, params: dict) -> str:
+    """Log the page (and the `summary.csv` it was built from) to MLflow, next to the runs."""
     import mlflow
 
     mlflow.set_tracking_uri(mlflow.get_tracking_uri())
     mlflow.set_experiment(EXPERIMENT)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
-    with mlflow.start_run(run_name=f"MIL overlay report {split} {stamp}") as run:
+    with mlflow.start_run(run_name=f"MIL overlay report {html_path.stem} {stamp}") as run:
         mlflow.log_artifact(str(html_path))
+        if summary_csv.exists():
+            mlflow.log_artifact(str(summary_csv))
+        mlflow.log_params(params)
         mlflow.log_metric("slides", n_slides)
         return run.info.run_id
 
@@ -304,8 +309,20 @@ def self_test() -> int:
     assert "heatmap" in html, "overlay must be a heatmap layer"
     ghtml = to_xml(grey)
     assert "colormap" in ghtml, "grey shader must reach the link"
-    assert "opacity" in ghtml and "custom_colormap" in ghtml, "opacity + ramp must reach the link"
-    assert "%23ffffff" in ghtml and "%23333333" in ghtml, "black -> white ramp (quote() escapes #)"
+    # Decode a real link and check what xOpat is actually handed: the shader JSON is
+    # percent-encoded in the href, so asserting on colour strings proves nothing.
+    import json
+    import re
+    import urllib.parse
+
+    link = json.loads(urllib.parse.unquote(
+        re.search(r"xopat/redirect\.php#([^\"']+)", ghtml).group(1)))
+    shader_conf = link["visualizations"][0]["shaders"]["layer_shader_0"]["params"]
+    assert shader_conf["opacity"] == 0.5, shader_conf["opacity"]
+    assert shader_conf["color"]["default"][0] == "#000000", "value 0 must be black, not transparent"
+    assert shader_conf["color"]["default"][-1] == "#ffffff", "the peak must be white"
+    assert set(shader_conf["threshold"]["mask"]) == {1}, "no bin may be hidden"
+    assert "black is where the model does not look" in ghtml, "legend must match the shader"
     assert "sqrt" in ghtml.lower() or "brightest tile" in ghtml, "legend must match the scale"
     assert "bioptic_tree/2020/01/002/slideB-2-N/slideB-2-N.mrxs" in html  # mount-relative
     assert "masks/test/slideB-2-N.tiff" in html
@@ -357,7 +374,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {out} ({out.stat().st_size // 1024} KB, {len(rows)} slides)")
     print(f"accuracy {rows.correct.mean():.4f} on these {len(rows)} slides")
     if not args.no_mlflow:
-        run_id = upload(out, args.split, len(rows))
+        run_id = upload(out, mask_dir / "summary.csv", args.split, len(rows), {
+            "shader": args.shader, "opacity": args.opacity, "scale": args.scale,
+            "sort": args.sort, "masks_dir": str(mask_dir)})
         print(f"MLflow run {run_id} in experiment '{EXPERIMENT}'")
     return 0
 
