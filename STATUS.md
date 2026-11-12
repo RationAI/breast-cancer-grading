@@ -166,13 +166,13 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
 
 - Output: `/mnt/projects/breast_cancer/brc_grading/masks/<split>/{<slide>.tiff, attention_scores.csv,
   summary.csv}` (**measured 428–471 MB per slide** — every slide in this estate is ~105 000 × 220 000 px — so ~117 GB
-  for the 266 test slides; the PVC had 609 TB free when measured).
+  for the 266 test slides; the PVC had 609 TB free when measured). **Done: 266/266, 98 GB total.**
 - **Resumable**: existing masks and `score_cache/` (keyed by parquet bytes + which weights) are skipped,
   so a resubmit continues. Measured 2.4 min per slide on the 8-CPU pod (every slide here is ~23 Gpx at
   level 0, and most of that is LZW encoding 99 % background) -> **~10.5 h for the 266 test slides**.
   `MASKS_CPU` is the knob (libvips encodes one TIFF tile per thread, `VIPS_CONCURRENCY=$(nproc)` is set by
   the job); to go faster, shard the slide list across jobs instead of raising the CPU — the encode is
-  sequential per slide.
+  sequential per slide. Actual wall time for all 266: **8.8 h** (2.0 min/slide), not the 10.5 h estimated.
 - Values are an **absolute** scale so a colour means the same on every slide: 0 = no tile, 1 = an equal
   share of that slide's attention, 128 = 10x, 255 = 100x or more. Pale = the head did not focus.
 - Verified on the job's own output: 12-level pyramid, level-0 dims equal the slide's, and the mask value at
@@ -190,36 +190,37 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-masks-test-jiri-buchta
 - Show the overlay as "where the grade head looked", **not** "where the tumour is": §10 measured
   tumour-vs-stroma contrast 0.48 (below chance). The caveat is written into the report YAML too.
 
-### Turning the masks on disk into a report (`scripts/xopat_report.py`)
+### The report for the pathologist (`scripts/xopat_report.py`)
+
+All **266/266 test masks are done** (job ran 21:45 -> 06:31 = 8.8 h, 98 GB on the PVC). One command rebuilds the
+report from whatever masks are on the PVC — no model, no GPU, **40 s**:
 
 ```bash
-REPORT_JOB_NAME=brc-grading-xopat-report5 REPORT_SCRIPT=xopat_report.py \
-  REPORT_ARGS='--regen --user jiribuchta' uv run --no-sync python scripts/run_report.py
-kubectl logs -n rationai-jobs-ns job/brc-grading-xopat-report5-jiri-buchta
+REPORT_JOB_NAME=brc-grading-report-heatmap REPORT_SCRIPT=xopat_report.py \
+  REPORT_ARGS='--user jiribuchta' uv run --no-sync python scripts/run_report.py
+kubectl logs -n rationai-jobs-ns job/brc-grading-report-heatmap-jiri-buchta
 ```
 
-- `--regen` rewrites `report_conf/reporter/attention_<split>.yaml` for the masks **actually on the PVC**
-  (cheap: bag index + `summary.csv`, no model), then runs `python -m report`. Output:
-  `reports/attention_<split>.html` on the PVC **and** a run in MLflow experiment `Breast Cancer Grading`.
-- The HTML is a gallery of xOpat deep-link URLs + thumbnails; nothing is re-tiled. xOpat opens the files
-  itself — `report.infer_mount_path` strips `/mnt/`, so it needs to see both `projects/...` (masks) and
-  `bioptic_tree/...` (WSIs). If a report shows masks but a grey slide, that is the xOpat mount, not us.
-- `report` 1.1.5 lives in `gitlab.ics.muni.cz/.../pipeline/report.git` over **SSH**, which pods have no key
-  for, so the copy Tile-Morph had installed is vendored at `vendor/report` on the PVC (207 KB, MIT license
-  file included) and put on `PYTHONPATH`. It needs `orjson` (installed at runtime from nexus);
-  `hydra-core`, `jinja2`, `mlflow`, `polars` are already in the lock.
-- `MLFlowReportStorer` does `get_experiment_by_name(name).experiment_id`, so it **crashes if the experiment
-  does not exist**. The YAML points at `Breast Cancer Grading` (id 107, ours) — it said `Breast Cancer`
-  (id 61, not ours) when ported from Tile-Morph.
-- The invocation is `python -m report --config-dir report_conf +reporter=<name> user=<you>`. The `+` is
-  required and was found by dry run, not guessed: upstream `default.yaml` keeps `reporter` a plain node, so a
-  bare `reporter=name` fails with *"Could not override 'reporter'. No match in the defaults list"* (Tile-Morph's
-  README documents the bare form — it cannot work). `--config-dir` only **adds** a group dir; the primary
-  config and the `mlflow`/`hydra` groups still come from the installed package, so `report_conf` needs
-  nothing but `reporter/*.yaml`. The script probes `--config-dir` and `++hydra.searchpath=[…]` and prints
-  which one composed.
-- Not runnable from the notebook: it has a **4 GiB** cgroup limit and `python -m report` imports mlflow and
-  gets OOM-killed (exit 137) before printing anything.
+- Output: `reports/<split>_heatmap.html` (1.59 MB, 266 cards) on the PVC **plus** an MLflow run holding the same
+  file as an artifact. Current run `85bb637eed9f49fca4b98d15a0e9cd93`, metric `slides=266`, artifact
+  `test_heatmap.html` (downloaded back at the same 1 587 266 bytes to prove it).
+- Each card: the slide's truth/prediction/probabilities and `eff_tiles` from `summary.csv`, next to an xOpat
+  deep link that opens the WSI with the attention mask as a **heatmap** layer (`rationai.reporting.viewer_url`).
+  `--self-test` renders two fake rows and asserts the pieces (266-card page, heatmap shader, ordering).
+- **Which MLflow**: jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow` from the `default-envs`
+  configmap, and the 46 MIL runs are in its experiment **37** `Breast Cancer Grading` — the script uses
+  `mlflow.get_tracking_uri()`, so the report run lands there **next to the training runs** (verified with
+  `mlflow.search_runs`). Do *not* hardcode a URI: the older `python -m report` path hardcodes
+  `http://mlflow.rationai-mlflow:5000` (a **different** server, its experiment 107), so yesterday's
+  `reports/attention_test.html` run sits there, orphaned from the runs. Superseded; kept for the deep-link
+  thumbnails.
+- `rationai-reporting` (the lib that builds the page) is a private GitHub repo with no key in pods, so the
+  `init` branch is vendored at `vendor/rationai-reporting` on the PVC and `ensure_reporting()` does
+  `uv pip install <that dir>` when the venv lacks it. Namespace-merge with our own `rationai.*` packages was
+  verified (it installs beside `rationai.client` in one venv). Install **without** `--index-url` — the explicit
+  nexus URL fails with `tunnel error` through the pod proxy.
+- Not runnable from the notebook: it has a **4 GiB** cgroup limit, and importing mlflow gets OOM-killed
+  (exit 137) before printing anything.
 
 `TRAIN_EMB_CACHE_GB` is refused when it exceeds half the pod; prefer the explicit `cache_mb` trio. Report
 jobs: `REPORT_JOB_NAME=… REPORT_SCRIPT=ensemble_variants.py REPORT_VARIANTS=… REPORT_ARGS='--oof
