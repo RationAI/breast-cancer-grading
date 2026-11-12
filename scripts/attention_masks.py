@@ -239,6 +239,10 @@ def stage_masks(args, tile_df, sel):
 def stage_report(args, summary, sel):
     """XOpat report YAML for the masks (same shape as Tile-Morph's lda_morphology.yaml)."""
     out_dir = Path(args.mask_dir)
+    # A sample scale (masks_sqrt/test) shares the leaf name with the real one (masks/test),
+    # so keying on the leaf alone let a 4-slide sample overwrite the split's YAML.
+    name = f"attention_{out_dir.name}" + (
+        "" if out_dir.parent.name == "masks" else f"_{out_dir.parent.name}")
     have = {t.stem for t in sorted(out_dir.glob("*.tiff"))}
     if not have:
         raise SystemExit(f"no masks in {out_dir}")
@@ -269,7 +273,7 @@ def stage_report(args, summary, sel):
 # Show them as "where the model looked", not "where the tumour is".
 #
 # Run:
-#     python -m report --config-dir report_conf reporter=attention_{out_dir.name} user=<you>
+#     python -m report --config-dir report_conf +reporter={name} user=<you>
 
 defaults:
   - _self_
@@ -341,7 +345,7 @@ save:
     description: Fold-averaged attention of the 4-class Nottingham grade MIL over the grading cohort WSIs
     user: ${{user}}
 """
-    dest = Path(args.report_yaml) if args.report_yaml else BASE / "report_conf" / "reporter" / f"attention_{out_dir.name}.yaml"
+    dest = Path(args.report_yaml) if args.report_yaml else BASE / "report_conf" / "reporter" / f"{name}.yaml"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(cfg)
     print(f"[stage3] {dest} ({len(rows)} slides)", flush=True)
