@@ -196,24 +196,26 @@ All **266/266 test masks are done** (job ran 21:45 -> 06:31 = 8.8 h, 98 GB on th
 report from whatever masks are on the PVC — no model, no GPU, **40 s**:
 
 ```bash
-REPORT_JOB_NAME=brc-grading-report-heatmap REPORT_SCRIPT=xopat_report.py \
-  REPORT_ARGS='--user jiribuchta' uv run --no-sync python scripts/run_report.py
-kubectl logs -n rationai-jobs-ns job/brc-grading-report-heatmap-jiri-buchta
+REPORT_JOB_NAME=brc-grading-report-heatmap4 REPORT_SCRIPT=xopat_report.py \
+  uv run --no-sync python scripts/run_report.py          # no --user/--regen: those were v1 flags
+kubectl logs -n rationai-jobs-ns job/brc-grading-report-heatmap4-jiri-buchta
 ```
 
-- Output: `reports/<split>_heatmap.html` (1.59 MB, 266 cards) on the PVC **plus** an MLflow run holding the same
-  file as an artifact. Current run `85bb637eed9f49fca4b98d15a0e9cd93`, metric `slides=266`, artifact
-  `test_heatmap.html` (downloaded back at the same 1 587 266 bytes to prove it).
+- Output: `reports/<split>_heatmap.html` (1.55 MB, 266 cards) on the PVC **plus** an MLflow run holding the same
+  file as an artifact. Current run `4cf76dc4079a4849a34eef2923815032`, metric `slides=266`, artifact
+  `test_heatmap.html` (downloaded back at the same 1 587 266 bytes to prove it). It re-prints
+  **accuracy 0.8534 on these 266 slides**, so the page is built from the same numbers as the shipped table.
 - Each card: the slide's truth/prediction/probabilities and `eff_tiles` from `summary.csv`, next to an xOpat
   deep link that opens the WSI with the attention mask as a **heatmap** layer (`rationai.reporting.viewer_url`).
   `--self-test` renders two fake rows and asserts the pieces (266-card page, heatmap shader, ordering).
-- **Which MLflow**: jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow` from the `default-envs`
-  configmap, and the 46 MIL runs are in its experiment **37** `Breast Cancer Grading` — the script uses
-  `mlflow.get_tracking_uri()`, so the report run lands there **next to the training runs** (verified with
-  `mlflow.search_runs`). Do *not* hardcode a URI: the older `python -m report` path hardcodes
-  `http://mlflow.rationai-mlflow:5000` (a **different** server, its experiment 107), so yesterday's
-  `reports/attention_test.html` run sits there, orphaned from the runs. Superseded; kept for the deep-link
-  thumbnails.
+- **Which MLflow** (three candidates, only one is right): jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow`
+  from the `default-envs` configmap, and the graded MIL runs are in its experiment **82 `BRC Grading`** (96 runs,
+  40 with `test/kappa`) — `EXPERIMENT` in the script is that name, so the report run lands **next to the runs it
+  describes**. Two decoys: experiment **37 `Breast Cancer Grading`** on the same server has 46 metric-less SDK
+  boilerplate runs (an early version of this report is there, run `85bb637e…`, superseded), and `107` on
+  *another* server (`http://mlflow.rationai-mlflow:5000`, hardcoded in the vendored `report` app) holds yesterday's
+  `reports/attention_test.html` run, orphaned from the runs. Never hardcode a URI; `mlflow.get_tracking_uri()` is
+  what the jobs are given.
 - `rationai-reporting` (the lib that builds the page) is a private GitHub repo with no key in pods, so the
   `init` branch is vendored at `vendor/rationai-reporting` on the PVC and `ensure_reporting()` does
   `uv pip install <that dir>` when the venv lacks it. Namespace-merge with our own `rationai.*` packages was
