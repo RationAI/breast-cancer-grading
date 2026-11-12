@@ -13,4 +13,10 @@ for r in sorted(runs, key=lambda r: r.info.start_time, reverse=True)[:8]:
 rep = mlflow.get_run("85bb637eed9f49fca4b98d15a0e9cd93")
 print("\nreport run:", rep.info.run_id, "exp", rep.info.experiment_id, rep.info.status, flush=True)
 print("  metrics:", dict(rep.data.metrics), flush=True)
-print("  artifacts:", [a.path for a in mlflow.list_artifacts("85bb637eed9f49fca4b98d15a0e9cd93")], flush=True)
+from mlflow.tracking import MlflowClient
+
+cl = MlflowClient()
+print("  artifacts:", [f.path for f in cl.list_artifacts("85bb637eed9f49fca4b98d15a0e9cd93")], flush=True)
+tmp = cl.download_artifacts("85bb637eed9f49fca4b98d15a0e9cd93", "test_heatmap.html", "/tmp")
+import os
+print("  downloaded", tmp, os.path.getsize(tmp), "bytes", flush=True)
