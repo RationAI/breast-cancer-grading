@@ -1,201 +1,285 @@
-"""Assemble the xOpat overlay report from the mask TIFFs that are on the PVC.
+"""Build the xOpat overlay report: heatmaps + the per-slide numbers, in one HTML page.
 
-Runs the internal ``report`` app (it turns mask + slide paths into an HTML
-gallery of xOpat deep-link URLs and logs it to MLflow). Submit it as a job --
-MLflow and the PVC are only reachable in the cluster::
+Replaces the `report` (Hydra) gallery, which drew the masks with hard colour
+thresholds and could not show any per-slide numbers. This version renders the
+mask as an xOpat **heatmap** layer (`rationai.reporting.viewer_url` default) and
+puts `summary.csv` next to every thumbnail: truth, prediction with its
+probability, tiles, and how focused the bag was.
 
-    REPORT_JOB_NAME=brc-grading-xopat-report5 REPORT_SCRIPT=xopat_report.py \
-      REPORT_ARGS='--reporter attention_test --user jiribuchta' \
-      uv run --no-sync python scripts/run_report.py
+Run it as a job (the PVC and MLflow are only reachable in the cluster)::
 
-Then::
+    REPORT_JOB_NAME=brc-grading-report-heatmap REPORT_SCRIPT=xopat_report.py \
+      REPORT_ARGS='--split test' uv run --no-sync python scripts/run_report.py
+    kubectl logs -n rationai-jobs-ns job/brc-grading-report-heatmap-jiri-buchta
 
-    kubectl logs -n rationai-jobs-ns job/brc-grading-xopat-report5
+Local smoke test without the PVC (writes /tmp/xopat-report-selftest.html)::
 
-The HTML also lands on the PVC under ``reports/`` and in MLflow, experiment
-``MIL attention masks``. ``--reporter`` is the file name (without .yaml) in
-``report_conf/reporter/`` written by ``attention_masks.py --stage report``:
-``attention_test_conf`` = the 5-slide pilot, ``attention_test`` = the whole
-split once the mask job is done (regenerate it with ``--stage report``).
+    uv run --no-sync python scripts/xopat_report.py --self-test
 
-``report`` comes from an internal GitLab repo over SSH, which the pods have no
-key for, so the copy Tile-Morph already had installed is vendored on the PVC and
-put on PYTHONPATH (MIT-licensed, license file included, 207 KB).
-shortcut: hand-copied snapshot of report 1.1.5; re-copy from a notebook venv if
-their masks.py/xopat_helpers.py change.
+Needs `rationai-reporting` (private GitHub repo, no key in pods): copy of the
+`init` branch sits at ``<root>/vendor/rationai-reporting`` and the job installs it
+with uv, which also pulls `python-fasthtml`.
+shortcut: vendored snapshot of a branch that is still moving; re-copy when
+upstream changes. Do not PYTHONPATH it instead -- `rationai` in site-packages is
+a regular package (it has an `__init__.py`), so a loose `rationai/` dir on the
+path is shadowed, not merged.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
+import json
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
 
-ROOT = Path("/mnt/projects/breast_cancer/brc_grading")
-VENDOR = ROOT / "vendor" / "report"
-CONF_DIR = ROOT / "report_conf"
+
+DEFAULT_ROOT = Path("/mnt/projects/breast_cancer/brc_grading")
 EXPERIMENT = "Breast Cancer Grading"
+MLFLOW_UI = "http://mlflow.rationai-mlflow:5000/#/experiments/107"
+CLASSES = 4
 
-# orjson is a dependency of `report` that our locked venv does not carry; uv's
-# configured index reaches nexus through the pod proxy, so no --index-url here.
+CAVEAT = (
+    "The overlay is where the grade head *looked*, not where the tumour is: the "
+    "tumour-vs-stroma contrast measured 0.48 AUC (below chance, REPORT.md §10), so "
+    "read the colour as attention share. Brightness is one absolute scale for every "
+    "slide: the mask stores 0 = no tile, 1 = an equal share of that slide's attention "
+    "(1/N), 128 = 10x that share, 255 = 100x or more. `eff_tiles` (= 1/sum(w²)) is how "
+    "many tiles the bag effectively spent its attention on: ~N means it looked "
+    "everywhere, a few hundred means it committed to a spot."
+)
 
 
-def compose_forms(conf_dir: Path) -> list[list[str]]:
-    """The two ways to point Hydra at an external ``reporter/`` config dir.
+def load_rows(root: Path, mask_dir: Path) -> pd.DataFrame:
+    """One row per slide that has BOTH a mask on disk and a row in summary.csv.
 
-    Verified locally against the package: ``--config-dir`` acts as an *extra*
-    group dir -- the app's primary config (and its ``mlflow``/``hydra`` groups)
-    still come from the installed package, so ``report_conf`` only has to hold
-    ``reporter/*.yaml``. The reporter override itself has to be ``+reporter=``
-    because upstream ``default.yaml`` keeps ``reporter`` a plain node, so a bare
-    ``reporter=name`` has no defaults-list match ("Could not override
-    'reporter'").
+    Ordering is left to `sort_rows`; missing masks are dropped on purpose -- a card
+    whose overlay 404s is worse than no card.
     """
-    return [
-        ["--config-dir", str(conf_dir)],
-        [f"++hydra.searchpath=[{conf_dir}]"],
-    ]
+    summary = pd.read_csv(mask_dir / "summary.csv")
+    have = {p.stem for p in sorted(mask_dir.glob("*.tiff"))}
+    rows = summary[summary.slide_name.isin(have)].copy()
+    if rows.empty:
+        raise SystemExit(f"no slide has both a mask in {mask_dir} and a summary.csv row")
+    rows["probs"] = rows.probs.map(json.loads)
+    for c in range(CLASSES):
+        rows[f"p{c}"] = rows.probs.str[c]
+    mapping = pd.read_csv(root / "data_mapping.csv")
+    mapping["slide_name"] = mapping.path.str.split("/").str[-2]
+    rows = rows.merge(mapping[["slide_name", "path"]], on="slide_name", how="left")
+    missing = int(rows.path.isna().sum())
+    if missing:
+        print(f"warning: {missing} slides have no path in data_mapping.csv, dropped")
+        rows = rows[rows.path.notna()]
+    return rows.reset_index(drop=True)
 
 
-def run_report(
-    form: list[str],
-    reporter: str,
-    user: str,
-    out_dir: Path,
-    resolve_only: bool,
-    env: dict[str, str],
-) -> subprocess.CompletedProcess[str]:
-    """One invocation of the report app in its own hydra run dir."""
-    argv = [
-        sys.executable,
-        "-m",
-        "report",
-        *form,
-        f"+reporter={reporter}",
-        f"user={user}",
-        f"hydra.run.dir={out_dir}",
-    ]
-    if resolve_only:
-        argv += ["--cfg", "job", "--resolve"]
-    return subprocess.run(
-        argv, check=False, capture_output=True, text=True, timeout=3600, env=env
+def sort_rows(rows: pd.DataFrame, how: str) -> pd.DataFrame:
+    """Review order: the interesting slides first."""
+    if how == "name":
+        return rows.sort_values("slide_name")
+    if how == "eff-desc":
+        return rows.sort_values(["eff_tiles", "slide_name"], ascending=[False, True])
+    # wrong-first: misclassified slides, most-focused ones of those first
+    return rows.sort_values(["correct", "eff_tiles"], ascending=[True, False])
+
+
+def global_metrics(rows: pd.DataFrame) -> dict[str, list]:
+    """Cohort-level numbers for the table under the header."""
+    truth, pred = rows.truth.to_numpy(), rows.pred.to_numpy()
+    per_class = {}
+    for c in range(CLASSES):
+        tp = int(((pred == c) & (truth == c)).sum())
+        fp = int(((pred == c) & (truth != c)).sum())
+        fn = int(((pred != c) & (truth == c)).sum())
+        precision = tp / (tp + fp) if tp + fp else float("nan")
+        recall = tp / (tp + fn) if tp + fn else float("nan")
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (tp + fp) and (tp + fn) and (precision + recall)
+            else float("nan")
+        )
+        per_class[f"class {c} — precision / recall / F1"] = [f"{precision:.2f} / {recall:.2f} / {f1:.2f}"]
+        per_class[f"class {c} — slides (true)"] = [int((truth == c).sum())]
+    return {
+        "slides with masks": [len(rows)],
+        "accuracy": [float(rows.correct.mean())],
+        "mean eff_tiles (attention spread, tiles)": [round(float(rows.eff_tiles.mean()), 1)],
+        "median eff_tiles": [round(float(rows.eff_tiles.median()), 1)],
+        "mean tiles per slide": [round(float(rows.n_tiles.mean()), 1)],
+        **per_class,
+    }
+
+
+def card_metrics(row: pd.Series) -> dict[str, list]:
+    """Per-slide table: what the model said, how confidently, where it looked."""
+    probs = row.probs
+    return {
+        "prediction": [f"G{int(row.pred)}" + ("" if row.correct else " ✗")],
+        "probabilities (G0…G3)": [" / ".join(f"{p:.3f}" for p in probs)],
+        "top probability": [round(float(max(probs)), 4)],
+        "tiles": [int(row.n_tiles)],
+        "eff_tiles": [round(float(row.eff_tiles), 1)],
+        "max tile weight": [round(float(row.max_weight), 5)],
+    }
+
+
+def build_page(rows: pd.DataFrame, mask_dir: Path, title: str) -> object:
+    from fasthtml.common import P
+    from rationai.reporting import (
+        Report,
+        ReportGrid,
+        ReportHeader,
+        ReportSection,
+        RunList,
+        SummaryTable,
+        attach_layers,
+        layers_from_disk,
+        slide_card,
+        slides_from_paths,
     )
+
+    slides = attach_layers(
+        slides_from_paths(rows.path.tolist(), layer_name="WSI (Mirax)"),
+        layers_from_disk(mask_dir, globs=("*.tiff",), layer_name="Attention"),
+    )
+    by_name = {s["name"]: s for s in slides}
+    cards = []
+    for row in rows.itertuples():
+        cards.append(
+            slide_card(
+                {**by_name[Path(row.path).stem], "ground_truth": f"G{int(row.truth)}"},
+                metrics=card_metrics(row),
+            )
+        )
+    runs = [{"name": "MIL runs (MLflow)", "href": MLFLOW_UI}]
+    return Report(
+        "Overlay report",
+        ReportHeader(title, RunList(runs)),
+        SummaryTable(global_metrics(rows), title="Cohort and agreement"),
+        ReportSection("How to read the overlay", P(CAVEAT)),
+        ReportSection(f"Slides ({len(cards)}) — worst-agreement first", ReportGrid(*cards)),
+        title=title,
+    )
+
+
+def upload(html_path: Path, split: str, n_slides: int) -> str:
+    """Log the page (and the CSV it was built from) to MLflow, next to the runs."""
+    import mlflow
+
+    mlflow.set_tracking_uri(mlflow.get_tracking_uri())
+    mlflow.set_experiment(EXPERIMENT)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    with mlflow.start_run(run_name=f"MIL overlay report {split} {stamp}") as run:
+        mlflow.log_artifact(str(html_path))
+        mlflow.log_metric("slides", n_slides)
+        return run.info.run_id
+
+
+def ensure_reporting(root: Path) -> None:
+    """Install `rationai-reporting` from the PVC copy if the venv lacks it.
+
+    Upstream is a private GitHub repo and pods have no key for it, so the job gets
+    the vendored copy (which also pulls `python-fasthtml` from the normal index).
+    """
+    try:
+        import rationai.reporting  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+    src = root / "vendor" / "rationai-reporting"
+    if not src.is_dir():
+        raise SystemExit(f"rationai.reporting not installed and no vendored copy at {src}")
+    subprocess.run(
+        ["uv", "pip", "install", "--python", sys.executable, str(src)],
+        check=True,
+    )
+
+
+def self_test() -> int:
+    """Render a page from two fake rows; checks the pieces the user asked for."""
+    ensure_reporting(DEFAULT_ROOT)
+    root = Path("/tmp/xopat-selftest")
+    mask_dir = root / "masks" / "test"
+    mask_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("slideA-1-T", "slideB-2-N"):
+        (mask_dir / f"{name}.tiff").touch()
+    pd.DataFrame(
+        {
+            "slide_name": ["slideA-1-T", "slideB-2-N"],
+            "case": ["slideA", "slideB"],
+            "truth": [0, 2],
+            "pred": [0, 3],
+            "correct": [1, 0],
+            "n_tiles": [4000, 900],
+            "max_weight": [0.01, 0.4],
+            "eff_tiles": [1500.0, 12.0],
+            "probs": ['[0.9,0.05,0.03,0.02]', '[0.01,0.04,0.35,0.6]'],
+        }
+    ).to_csv(mask_dir / "summary.csv", index=False)
+    (root / "data_mapping.csv").write_text(
+        "path,grade,case\n"
+        "/mnt/bioptic_tree/2020/01/001/slideA-1-T/slideA-1-T.mrxs,0,slideA\n"
+        "/mnt/bioptic_tree/2020/01/002/slideB-2-N/slideB-2-N.mrxs,2,slideB\n"
+    )
+
+    rows = sort_rows(load_rows(root, mask_dir), "wrong-first")
+    assert rows.slide_name.tolist() == ["slideB-2-N", "slideA-1-T"], rows.slide_name.tolist()
+    page = build_page(rows, mask_dir, "selftest")
+    from fasthtml.common import to_xml
+
+    html = to_xml(page)
+    assert "slideB-2-N" in html and "slideA-1-T" in html
+    assert "heatmap" in html, "overlay must be a heatmap layer"
+    assert "bioptic_tree/2020/01/002/slideB-2-N/slideB-2-N.mrxs" in html  # mount-relative
+    assert "masks/test/slideB-2-N.tiff" in html
+    assert "0.350 / 0.600" in html, "per-slide probabilities from summary.csv"
+    assert "G3 ✗" in html and "G2" in html
+    assert "accuracy" in html and "eff_tiles" in html
+    out = Path("/tmp/xopat-report-selftest.html")
+    out.write_text(html, encoding="utf-8")
+    print(f"selftest ok: {len(rows)} rows, {len(html) // 1024} KB -> {out}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--reporter", default="attention_test")
+    ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     ap.add_argument("--split", default="test")
-    ap.add_argument(
-        "--regen",
-        action="store_true",
-        help="Rewrite the reporter YAML for the masks actually on disk first.",
-    )
-    ap.add_argument("--user", default=os.getenv("JOB_USER", "jiribuchta"))
-    ap.add_argument("--conf-dir", type=Path, default=CONF_DIR)
-    ap.add_argument("--vendor", type=Path, default=VENDOR)
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/xopat-report"))
-    ap.add_argument(
-        "--save-to",
-        type=Path,
-        default=ROOT / "reports",
-        help="Where to copy the HTML (PVC path so it survives the pod).",
-    )
+    ap.add_argument("--masks-dir", type=Path, default=None)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--sort", choices=["wrong-first", "eff-desc", "name"], default="wrong-first")
+    ap.add_argument("--no-mlflow", action="store_true", help="Write the HTML only.")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
 
     if args.self_test:
-        for form in compose_forms(Path("CONF")):
-            print(" ".join(form))
-        return 0
+        return self_test()
 
-    if not (args.vendor / "report" / "__main__.py").is_file():
-        print(f"FATAL: no vendored report package at {args.vendor}")
-        return 1
-    if args.regen:
-        # Cheap stage: reads the bag index + summary.csv, no model, no rendering.
-        gen = subprocess.run(
-            [
-                sys.executable,
-                "-u",
-                "scripts/attention_masks.py",
-                "--split",
-                args.split,
-                "--stage",
-                "report",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-        )
-        print((gen.stdout + gen.stderr)[-800:])
-        if gen.returncode:
-            print("FATAL: could not regenerate the reporter YAML")
-            return 1
-    reporter_yaml = args.conf_dir / "reporter" / f"{args.reporter}.yaml"
-    if not reporter_yaml.is_file():
-        print(f"FATAL: no reporter config {reporter_yaml}")
-        return 1
-    print(f"reporter config: {reporter_yaml}")
+    ensure_reporting(args.root)
+    mask_dir = args.masks_dir or args.root / "masks" / args.split
+    rows = sort_rows(load_rows(args.root, mask_dir), args.sort)
+    if args.limit:
+        rows = rows.head(args.limit)
+    title = f"Breast cancer Nottingham grade — MIL attention ({args.split}, {len(rows)} slides)"
+    page = build_page(rows, mask_dir, title)
 
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(args.vendor)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
-    )
-    if subprocess.run(
-        [sys.executable, "-c", "import orjson"], capture_output=True, check=False
-    ).returncode:
-        subprocess.run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                sys.executable,
-                "orjson",
-            ],
-            check=False,
-        )
+    from fasthtml.common import to_xml
 
-    out_dir = args.out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    working: list[str] | None = None
-    for form in compose_forms(args.conf_dir):
-        probe = run_report(
-            form, args.reporter, args.user, out_dir, resolve_only=True, env=env
-        )
-        ok = "mask_retrievers" in probe.stdout
-        print(f"form {form}: {'composes' if ok else 'FAILED'}")
-        if not ok:
-            print((probe.stdout + probe.stderr)[-1200:])
-        else:
-            print(probe.stdout[-600:])
-            working = form
-            break
-    if working is None:
-        print("FATAL: neither hydra invocation composes the config")
-        return 1
-
-    result = run_report(
-        working, args.reporter, args.user, out_dir, resolve_only=False, env=env
-    )
-    print((result.stdout + result.stderr)[-2500:])
-
-    produced = sorted(out_dir.rglob("report.html"))
-    if not produced:
-        print("FATAL: report run left no report.html")
-        return 1
-    args.save_to.mkdir(parents=True, exist_ok=True)
-    dest = args.save_to / f"{args.reporter}.html"
-    shutil.copyfile(produced[-1], dest)
-    print(f"saved {dest} ({dest.stat().st_size // 1024} KB)")
-    print(f"run {result.returncode}; also in MLflow experiment '{EXPERIMENT}'")
-    return 0 if result.returncode == 0 else 1
+    out = args.out or args.root / "reports" / f"{args.split}_heatmap.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(to_xml(page), encoding="utf-8")
+    print(f"wrote {out} ({out.stat().st_size // 1024} KB, {len(rows)} slides)")
+    print(f"accuracy {rows.correct.mean():.4f} on these {len(rows)} slides")
+    if not args.no_mlflow:
+        run_id = upload(out, args.split, len(rows))
+        print(f"MLflow run {run_id} in experiment '{EXPERIMENT}'")
+    return 0
 
 
 if __name__ == "__main__":
