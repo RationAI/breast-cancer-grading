@@ -223,16 +223,20 @@ kubectl logs -n rationai-jobs-ns job/brc-grading-report-grey-jiri-buchta
   `--self-test` renders two fake rows and asserts both shaders, the ordering and the mount-relative paths.
 - Each card: the slide's truth/prediction/probabilities and `eff_tiles` from `summary.csv`, next to an xOpat
   deep link for the WSI with the mask as a layer.
-- **`--shader grey` (default) draws the mask as a translucent black -> white ramp**: `shader_conf` on the layer
-  (`type: colormap`, `params.opacity` from `--opacity` (0.5), 7-stop grey ramp, and `threshold.breaks[0]` at
-  1/255 with `mask[0] = 0` so **value 0 stays transparent** and the tissue shows through). Only keys the
-  reviewed Tile-Morph LDA config uses. `--shader heatmap` is xOpat's built-in coloured heatmap (what
-  `test_heatmap.html` links carry). Verified by decoding a link out of the written HTML:
-  `opacity 0.5`, `mask [0,1,1,1,1,1,1]`, colours `'' -> #333 -> ... -> #ffffff`.
+- **`--shader grey` (default) draws a black -> white brightness ramp over the WHOLE slide**: the ramp starts
+  at `#000000` (value 0 = no tile = **black**, not transparent — an earlier version masked bin 0 out and the
+  tissue showed through the floor; the ask was a black field), 7 stops, no hidden bins, `params.opacity` from
+  `--opacity` (0.5) so the tissue stays visible through the veil. Verified by decoding a link out of the written
+  HTML: `color.default[0] == '#000000'`, `mask == [1]*7`. `--shader heatmap` is xOpat's built-in colours.
 - **`--scale log|pct|sqrt`** here only picks the legend sentence on the page, so it must match how the masks in
   `--masks-dir` were encoded. Output name follows the knobs: `test_grey.html` (log), `test_greysqrt.html`,
-  `test_heatmap.html` (heatmap+log). Current pages on the PVC: `test_grey.html` (266 slides, MLflow run
-  `c5ec7072c0d5444fbaed9bc158e44bc5`), plus 4-slide `test_greysqrt.html` / `test_greypct.html` (`--no-mlflow`).
+  `test_heatmap.html` (heatmap+log). Every run now logs its knobs as params (`scale`, `opacity`, `shader`,
+  `sort`, `masks_dir`) and ships `summary.csv` beside the HTML. Report runs in exp 82, verified via `MlflowClient`:
+  **`c9c975a3`** `test_grey` (266, log, black floor — use this one; `c5ec7072` at 12:52 is the same filename with
+  the old *transparent* floor, superseded), **`4bcc7bbe`** `test_greysqrt` (4 slides), **`22b8b66e`**
+  `test_greypct` (4 slides), `4cf76dc4` `test_heatmap` (266). The full 266-slide **sqrt** TIFFs are encoding in
+  `masks_sqrt/test/` (job `brc-grading-masks-sqrt`, ~1 slide/min) — rebuild the page over them when it finishes
+  with `--masks-dir .../masks_sqrt/test --scale sqrt`.
 - **Which MLflow** (three candidates, only one is right): jobs get `MLFLOW_TRACKING_URI=http://mlflow-s3.rationai-mlflow`
   from the `default-envs` configmap, and the graded MIL runs are in its experiment **82 `BRC Grading`** (96 runs,
   40 with `test/kappa`) — `EXPERIMENT` in the script is that name, so the report run lands **next to the runs it
