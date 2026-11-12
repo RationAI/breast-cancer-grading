@@ -38,7 +38,10 @@ import pandas as pd
 
 
 DEFAULT_ROOT = Path("/mnt/projects/breast_cancer/brc_grading")
-EXPERIMENT = "Breast Cancer Grading"
+# Must be the experiment the MIL runs live in (82, 40 runs with test/kappa).
+# "Breast Cancer Grading" (37) is a metric-less SDK-boilerplate experiment, and the
+# vendored `report` app's 107 sits on a third server entirely.
+EXPERIMENT = "BRC Grading"
 MLFLOW_UI = "http://mlflow.rationai-mlflow:5000/#/experiments/107"
 CLASSES = 4
 
