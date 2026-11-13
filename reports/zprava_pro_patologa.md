@@ -92,6 +92,36 @@ díval — jestli to je např. běžný epitel, nebo něco, co vypadá jako grad
   Model ho klasifikoval správně (N, 100 %), ale jde o degradovaný/neúplný
   materiál; doporučuji ověřit kvalitu skenu před jakoukoliv interpretací.
 
+## 5. Revize patologa (14. 11. 2026) — co z „největších chyb" zbylo
+
+Patolog prošel preparáty z §1 a okomentoval je (původní poznámky:
+[`zprava_pro_patologa_komentare.md`](zprava_pro_patologa_komentare.md)). Přepis verdiktů:
+
+| Preparát | Pravda | Model | Verdikt patologa | Skutečná chyba modelu? |
+|---|---|---|---|---|
+| `2021_01085-02-N` | N | G3 | Na slidu je **duktní karcinom in situ** — detekce malignity a G3 je v pořádku; in-situ léze dosud nerozlišujeme | **Ne — model měl pravdu** (popisek N je úlohou definice) |
+| `2021_02976-08-T1` | G1 | G3 | V prsu tři nádory (G1+G2+G3); tenhle slid je ten G3 — **mismatch v datech** | **Ne — model měl pravdu** |
+| `2024_01350-1-T` | G2 | G1 | „G1 je podle mne v pořádku" | **Ne — model měl pravdu** |
+| `2021_00353-21-T2` | G3 | N | Mukózní karcinom (pravděpodobně morfologie 8480, ne 8500); **rozhodně není G3, ale G2** — v případě dva karcinomy, mismatch v datech | Ne — chybný popisek (skutečnost je G2, chyba G3→N je přehnaná) |
+| `2021_06916-02-T` | G1 | G3 | Invazivní karcinom je G1, ale jen menší část slidu; **attention jde na převažující lézi — G3 DCIS. Takže je to správně** | Ne — model sledoval převažující lézi |
+| `2020_00168-02-T` | G3 | G2 | Malé zastoupení nádoru; Nottingham skóre 7 = G2 (nedopočítané mitózy) | Hraniční — G2 obhajitelné |
+| `2024_00279-2-T` | G2 | G3 | „K diskusi — rysy G3, ale skóre nemuselo vyjít" | Hraniční |
+| `2024_05767-2-T` | G3 | G2 | G3 kvůli mitózám (3+2+3 = 8) — **„tady model ujel"" | **Ano — skutečná chyba** |
+
+**Závěr revize: z 8 největších „chyb" modelu je jen 1 skutečná chyba modelu.** Tři jsou chyby
+popisků (model měl pravdu), tři jsou obhajitelné (špatný popisek / převažující jiná léze),
+dvě jsou pravé hraniční případy. Čísla v této zprávě (72 % na tumorech, 85,3 % celkem)
+jsou tedy **dolní mez** kvality modelu — významnou část zbylých chyb tvoří pravděpodobně
+šum v popiscích (jedno čtení, jeden patolog).
+
+Další zjištění z revize:
+
+- **Třída N obsahuje in-situ léze (DCIS)** — tedy není čistě „bez tumoru". Model DCIS
+  na slidu `2021_01085-02-N` **našel** (zaměřená pozornost, 173/6 316 dlaždic) a
+  klasifikoval jako G3 — to je úspěch detekce, ne chyba.
+- Dva konkrétní datové problémy k opravě: přiřazení grade u vícenádorových případů
+  (`2021_02976`) a morfologické kódy 8500 vs 8480 u mukózního karcinomu (`2021_00353`).
+
 ## Matice záměn (266 testovacích preparátů)
 
 Řádky = pravda, sloupce = predikce modelu.

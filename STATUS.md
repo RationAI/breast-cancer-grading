@@ -43,6 +43,14 @@ sweeps, per-wave writeups) are summarised in `REPORT.md` §6, §7 and Appendices
    BRC slides.
 5. **Rule for new arms** (`REPORT.md` §13): changes the input, not the head; ≥3 seeds on the OOF pool or it
    is not believed. Encoder change = funding decision, not an arm.
+6. **Measure the label-noise rate, don't guess it.** The pathologist's review of the 8 worst test errors
+   found **3 outright label errors (model was right), 3 defensible, 1 borderline, and only 1 real model
+   mistake** (`reports/zprava_pro_patologa_komentare.md`, integrated in `reports/latest_results.md`). So
+   the 0.7449/0.8534 headline is a **lower bound**. Extending the same review to all 39 test errors
+   (one pathologist session) turns that into a corrected accuracy. Known defects for a v2 cohort:
+   multi-tumour grade assignment, mucinous 8480-vs-8500 codes, DCIS inside class N. **Re-grading must be
+   blind to the model's prediction** — fixing only the slides the model got wrong contaminates the test
+   set; a v2 cohort needs its own held-out re-grade.
 
 ## What a run costs
 

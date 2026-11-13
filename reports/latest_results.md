@@ -36,6 +36,24 @@ Recall per class (from the actual per-slide predictions of the shipped ensemble)
 - In plain language: nearly always separates tumour-free from tumour (98 %+),
   ranking is strong (AUROC 0.95), naming the exact grade — especially G1 — is the weak part.
 
+## Expert review of the worst errors (pathologist, 14 Nov 2026)
+
+The pathologist reviewed the 8 largest grade-jump "errors" (notes preserved in
+[`zprava_pro_patologa_komentare.md`](zprava_pro_patologa_komentare.md)):
+
+| verdict | slides |
+|---|---|
+| **model was right — label is wrong** | 3 (`2021_01085-02-N` is DCIS, not N; `2021_02976-08-T1` is the G3 tumour of a 3-tumour breast, labelled G1; `2024_01350-1-T` "G1 is correct") |
+| defensible — label semantics / mismatch | 3 (`2021_00353-21-T2` mucinous ca should be G2 not G3; `2021_06916-02-T` model followed the predominant G3 DCIS, label tracks the minor invasive G1; `2020_00168-02-T` score 7 = G2) |
+| genuine borderline | 1 (`2024_00279-2-T`) |
+| **real model error** | **1** (`2024_05767-2-T`, mitosis-driven G3, 3+2+3) |
+
+**Implication: the headline numbers are a lower bound.** The worst-error bucket is dominated by
+single-reader label noise, not model failure — the model even *found* a DCIS that the N label ignores
+(focused attention, 173/6 316 tiles, called G3). Known label defects to fix in a v2 cohort (never
+silently — the test set must not be re-graded only where the model was wrong): multi-tumour grade
+assignment, mucinous 8480-vs-8500 codes, DCIS inside class N.
+
 ## What we rejected recently (why the numbers above did not move)
 
 | experiment | result | verdict |
