@@ -37,10 +37,15 @@ sweeps, per-wave writeups) are summarised in `REPORT.md` §6, §7 and Appendices
    (`REPORT.md` §10–§11): attention is non-degenerate but below chance against the available tumour flag.
    The `Breast MMCI Full Test` tile parquets carry per-tile `carcinoma_roi_percentage` on 50 unseen
    slides; needs one pass over 86 GB, so a job, not the notebook.
-4. **External grading test needs grades.** MammaPrint/MMCI slides have embeddings but **no joinable
-   Nottingham grades**, and 36 of the MMCI negatives are in our train set. Skip as a benchmark
-   (`REPORT.md` §11). For a real generalisation test: BRACS (public, ~198 graded slides) or another site's
-   BRC slides.
+4. **External grading test needs grades — BRACS has none publicly.** MammaPrint/MMCI slides have embeddings but
+   **no joinable Nottingham grades**, and 36 of the MMCI negatives are in our train set. Skip as a benchmark
+   (`REPORT.md` §11). BRACS (547 WSIs, subtypes N/PB/UDH/FEA/ADH/DCIS/IC, **no Nottingham grades**) is the
+   right external test — the paper we compared against had their own pathologist grade the 132 IC slides
+   (→128 after QC, G1/G2/G3 = 20/44/36 %), grades not public. Plan: embed all 547 with our own pipeline
+   (0.5 mpp rescales + QC + tissue masks already exist on `/mnt/data/Public`, BRC-A-43/49), run the shipped
+   fold-average, then (no labels needed) test N-vs-rest on their SL split + DCIS behaviour on the 61 DCIS
+   slides; for the paper-comparable grading validation, our pathologist must Elston-Ellis-grade the BRACS
+   IC slides (one session, blind to predictions).
 5. **Rule for new arms** (`REPORT.md` §13): changes the input, not the head; ≥3 seeds on the OOF pool or it
    is not believed. Encoder change = funding decision, not an arm.
 6. **Measure the label-noise rate, don't guess it.** The pathologist's review of the 8 worst test errors
