@@ -22,7 +22,7 @@ where the model was right.
 
 * Artifact (weights + manifest): `/mnt/projects/breast_cancer/brc_grading/artifacts/foldavg-20261111-1718/`
 * Overlays for all 266 test slides (xOpat): MLflow [experiment 82 "BRC Grading"](https://mlflow-s3.rationai.cloud.trusted.e-infra.cz/#/experiments/82), run `c9c975a3` → Artifacts → `test_grey.html`
-* Full write-up: [`REPORT.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/REPORT.md), one-page summary [`reports/latest_results.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/reports/latest_results.md)
+* Full write-up: [`REPORT.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/REPORT.md), one-page summary [`reports/latest_results.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/latest_results.md)
 * Updated children: **BRC-A-20** (datasets/cohort), **BRC-A-21** (methodology), **BRC-A-28** (evaluation).
 * Pending: external validation on BRACS (needs a pathologist to grade the BRACS IC slides — the dataset
   ships no Nottingham grades), and a label-noise measurement over all test errors.

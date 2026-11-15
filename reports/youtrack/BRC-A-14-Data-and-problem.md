@@ -2,7 +2,7 @@
 
 ## Label semantics (2026-11, corrected)
 
-The cohort is rebuilt by [`scripts/make_cohort.py`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/scripts/make_cohort.py)
+The cohort is rebuilt by [`scripts/make_cohort.py`](https://github.com/RationAI/breast-cancer-grading/blob/master/scripts/make_cohort.py)
 from the MOU Excel and lives at `/mnt/projects/breast_cancer/brc_grading/labels.csv` (1735 slides,
 columns `slide_id, grade, split`):
 
@@ -14,7 +14,7 @@ columns `slide_id, grade, split`):
 
 ## Label defects found by expert review (2026-11-14)
 
-The pathologist reviewed the 8 worst test errors ([`reports/zprava_pro_patologa_komentare.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/reports/zprava_pro_patologa_komentare.md)).
+The pathologist reviewed the 8 worst test errors ([`reports/zprava_pro_patologa_komentare.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/zprava_pro_patologa_komentare.md)).
 Verdicts: 3 outright label errors (the model was right), 3 defensible label-semantics cases,
 1 genuine borderline, only **1 real model mistake**. Concrete data defects to fix in a cohort v2:
 

@@ -8,8 +8,8 @@ embedding parquets**, which is what training consumes. All runs are in MLflow
 
 | step | MLflow | script |
 | --- | --- | --- |
-| Tiling | [run `bef4e85173d24c3992fb171429c71fd6`](https://mlflow-s3.rationai.cloud.trusted.e-infra.cz/#/experiments/82/runs/bef4e85173d24c3992fb171429c71fd6/artifacts) (dataset `artifacts/bc20-24`) | [`preprocessing/tiling`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/preprocessing/tiling/__main__.py) |
-| Virchow2 embeddings | [run `96532a9ff29241e4b65d57dbc379e944`](https://mlflow-s3.rationai.cloud.trusted.e-infra.cz/#/experiments/82/runs/96532a9ff29241e4b65d57dbc379e944/artifacts) (all 1735 per-slide parquets) | [`preprocessing/embeddings.py`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/preprocessing/embeddings.py) |
+| Tiling | [run `bef4e85173d24c3992fb171429c71fd6`](https://mlflow-s3.rationai.cloud.trusted.e-infra.cz/#/experiments/82/runs/bef4e85173d24c3992fb171429c71fd6/artifacts) (dataset `artifacts/bc20-24`) | [`preprocessing/tiling.py`](https://github.com/RationAI/breast-cancer-grading/blob/master/preprocessing/tiling.py) |
+| Virchow2 embeddings | [run `96532a9ff29241e4b65d57dbc379e944`](https://mlflow-s3.rationai.cloud.trusted.e-infra.cz/#/experiments/82/runs/96532a9ff29241e4b65d57dbc379e944/artifacts) (all 1735 per-slide parquets) | [`preprocessing/embeddings.py`](https://github.com/RationAI/breast-cancer-grading/blob/master/preprocessing/embeddings.py) |
 
 Key differences from the tiling documented in BRC-A-22 (old, stride 112 with epithelium/tissue
 threshold filtering):
@@ -20,7 +20,7 @@ threshold filtering):
   construction; tiles are filtered by tissue + QC only
 * 4 slides excluded for missing QC masks (`2020_01089-02-T`, `2020_01166-01-N`, `2020_02743-02-T`,
   `2020_06097-01-N`) — listed in
-  [`configs/experiment/preprocessing/embeddings/virchow2.yaml`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/configs/experiment/preprocessing/embeddings/virchow2.yaml)
+  [`configs/experiment/preprocessing/embeddings/virchow2.yaml`](https://github.com/RationAI/breast-cancer-grading/blob/master/configs/experiment/preprocessing/embeddings/virchow2.yaml)
 * one parquet per slide (median bag 61 MB, p90 144 MB, max 336 MB; 2560-d Virchow2 features), cached on
   the PVC at `/mnt/projects/breast_cancer/brc_grading/embeddings/bc20-24/`
 

@@ -38,7 +38,7 @@ Of the 8 largest grade-jump errors: **3 label errors where the model was right**
 N; a multi-tumour slide carrying the wrong tumour's grade; a G2 slide that is G1), 3 defensible
 label-semantics cases, 1 genuine borderline, **1 real model mistake**. The headline numbers above are
 therefore **lower bounds**. Notes preserved in
-[`reports/zprava_pro_patologa_komentare.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/reports/zprava_pro_patologa_komentare.md).
+[`reports/zprava_pro_patologa_komentare.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/zprava_pro_patologa_komentare.md).
 
 ## Overlays (xOpat) and reporting
 
@@ -47,9 +47,9 @@ therefore **lower bounds**. Notes preserved in
   → `test_grey.html` (same file on the PVC: `…/brc_grading/reports/test_grey.html`)
 * Per-slide table: `masks/test/summary.csv`
 * Report for the pathologist (Czech):
-  [`reports/zprava_pro_patologa.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/reports/zprava_pro_patologa.md)
+  [`reports/zprava_pro_patologa.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/zprava_pro_patologa.md)
 * One-page summary of what is shipped:
-  [`reports/latest_results.md`](https://gitlab.ics.muni.cz/rationai/digital-pathology/pathology/breast-cancer-grading/-/blob/master/reports/latest_results.md)
+  [`reports/latest_results.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/latest_results.md)
 
 ## Operating points (inference-time, no retrain)
 
