@@ -41,4 +41,4 @@ For clinical reporting: **add the 4-way P(Class) vector to the existing MammaPri
 
 ## Tools & reading
 
-Per-slide predictions and operating points: [`reports/latest_results.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/latest_results.md) · raw metrics: [`reports/run_summary.csv`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/run_summary.csv) · paper-style write-up with all evidence: [`REPORT.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/REPORT.md) · pathologist error review: [`reports/zprava_pro_patologa_komentare.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/zprava_pro_patologa_komentare.md).
+Per-slide predictions and operating points: [`reports/latest_results.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/latest_results.md) · paper-style write-up with all evidence: [`REPORT.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/REPORT.md) · pathologist error review: [`reports/zprava_pro_patologa_komentare.md`](https://github.com/RationAI/breast-cancer-grading/blob/master/reports/zprava_pro_patologa_komentare.md).
