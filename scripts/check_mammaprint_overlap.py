@@ -108,10 +108,10 @@ def main(argv: list[str] | None = None) -> int:
     # 2. same case via data_mapping (catches cases excluded from labels.csv)
     hitm = mapping.merge(his, on="key", suffixes=("_ours", "_his"))
     print(f"\n== case-level overlap with data_mapping.csv (incl. cases outside labels): "
-          f"{hitm.slide_id_his.nunique()} of {his.slide_id.nunique()}")
+          f"{hitm.slide_id.nunique()} of {his.slide_id.nunique()}")
     if len(hitm):
-        print(hitm[["slide_id_his", "record_num", "case", "grade", "path"]]
-              .sort_values("slide_id_his").to_string(index=False))
+        print(hitm[["slide_id", "record_num", "case", "grade", "path"]]
+              .sort_values("slide_id").to_string(index=False))
 
     # 3. literally the same WSI file (P2023_0835 stem in our mapping paths)
     stem_hit = mapping[mapping.stem.isin(set(his.stem))]
