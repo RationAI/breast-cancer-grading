@@ -281,3 +281,14 @@ reproduces MLflow exactly for the variants that have dumps.
 torch/pandas: `/home/jovyan/Tile-Morph-Clustering/.venv/bin/python`. Use heredocs (`python -` over stdin);
 `kubectl cp` into the PVC is refused by an operator webhook. Good for CSV/dump analysis and small `.pt`
 bags; anything scanning 86 GB of tile parquets belongs in a job.
+
+## MammaPrint tile-level agreement (Jiri's 308 explain slides)
+
+`brc-grading-mmattn-jiri-buchta` embeds all 308 WSIs at our scale and runs the fold-average
+attention stage -> `masks/mammaprint/`. Then, in order:
+`REPORT_SCRIPT=compare_mammaprint_attention.py REPORT_CPU=4 REPORT_MEMORY=16Gi` (joins his signed
+`leave_one_out` per-tile deltas with our raw attention on the overlapping 224/112 grids, writes
+`mammaprint_compare/` + the agreement-layer TIFFs + his LOO masks under `masks/mammaprint-loo-lowers/`),
+then `REPORT_SCRIPT=mammaprint_report.py` -> `reports/mammaprint_agreement.html` with three stacked
+xOpat layers (his index drivers / our attention / both-top-decile). The 4 contaminated slides are
+flagged and excluded from headlines. Selftest: `compare_mammaprint_attention.py --selftest`.
