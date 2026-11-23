@@ -78,6 +78,18 @@ def join_slide(ours: pd.DataFrame, his: pd.DataFrame) -> pd.DataFrame:
     return m
 
 
+def agree_flag(ours, driving_xy, q=0.9):
+    """Boolean per OUR tile: top q of our own weights AND its parent is a driving tile.
+
+    driving_xy: (N,2) array of his tile coords (his top-decile LOO tiles).
+    """
+    driving_idx = pd.MultiIndex.from_frame(pd.DataFrame(driving_xy, columns=["hx", "hy"]))
+    hit = np.zeros(len(ours), dtype=bool)
+    for hx, hy in his_parents(ours["x"], ours["y"]):
+        hit |= pd.MultiIndex.from_arrays([hx, hy]).isin(driving_idx)
+    return (ours["w"] >= ours["w"].quantile(q)).to_numpy() & hit
+
+
 def spearman(a, b) -> float:
     ok = pd.notna(a) & pd.notna(b)
     a, b = np.asarray(a, float)[ok], np.asarray(b, float)[ok]
@@ -130,7 +142,11 @@ def _selftest() -> int:
     off = ours.copy()
     off.loc[0, "x"] = 8960
     assert (join_slide(off, his)["n_sub"] < 4).any()
-    print("selftest ok: overlap-aware 4-child map, rho +-1 on synthetic data")
+    # agreement flag: top-decile own weight AND parent is a driving his tile
+    og = pd.DataFrame({"x": [0, 6144, 0], "y": [0, 0, 3072], "w": [0.9, 0.9, 0.1]})
+    assert agree_flag(og, [[0, 0]], q=0.9).tolist() == [True, False, False]
+    assert agree_flag(og, [], q=0.9).tolist() == [False, False, False]
+    print("selftest ok: overlap-aware 4-child map, rho +-1, agreement flag")
     return 0
 
 
@@ -206,13 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         if len(sub) >= MIN_TILES:
             d_q = sub["drives"].quantile(args.q)
             ours = load_ours(npzs[0])
-            w_q = ours["w"].quantile(args.q)     # our top decile on OUR grid
-            driving = sub[sub["drives"] >= d_q][["x", "y"]].rename(columns={"x": "hx", "y": "hy"})
-            driving_idx = pd.MultiIndex.from_frame(driving)
-            hit = np.zeros(len(ours), dtype=bool)
-            for hx, hy in his_parents(ours["x"], ours["y"]):
-                hit |= pd.MultiIndex.from_arrays([hx, hy]).isin(driving_idx).to_numpy()
-            flag = (ours["w"] >= w_q).to_numpy() & hit
+            driving = sub.loc[sub["drives"] >= d_q, ["x", "y"]].to_numpy()
+            flag = agree_flag(ours, driving, args.q)
             if flag.any():
                 agree_frames.append(pd.DataFrame({
                     "slide_name": str(sid),
