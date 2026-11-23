@@ -204,9 +204,9 @@ def main(argv: list[str] | None = None) -> int:
         # AND its containing his-tile drives the index top-q on this slide
         sub = m[m["n_sub"].fillna(0) >= 1]
         if len(sub) >= MIN_TILES:
-            w_q = sub["w"].quantile(args.q)
             d_q = sub["drives"].quantile(args.q)
             ours = load_ours(npzs[0])
+            w_q = ours["w"].quantile(args.q)     # our top decile on OUR grid
             driving = sub[sub["drives"] >= d_q][["x", "y"]].rename(columns={"x": "hx", "y": "hy"})
             driving_idx = pd.MultiIndex.from_frame(driving)
             hit = np.zeros(len(ours), dtype=bool)
