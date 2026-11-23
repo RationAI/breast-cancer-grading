@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -37,9 +38,16 @@ def slide_res(path: str) -> tuple[float, float]:
 
 def fix_one(args: tuple[Path, float, float]) -> str:
     tiff, xres, yres = args
-    im = pyvips.Image.new_from_file(tiff, access="sequential")
-    if im.xres > 10:
-        return f"skip {tiff.name}"
+    # shortcut: compare's writer is not atomic; skip anything touched in the
+    # last 10 min (still being rendered), rerun after it finishes to catch them
+    if time.time() - tiff.stat().st_mtime < 600:
+        return f"skip {tiff.name} (writing)"
+    try:
+        im = pyvips.Image.new_from_file(tiff, access="sequential")
+        if im.xres > 10:
+            return f"skip {tiff.name}"
+    except Exception as e:
+        return f"skip {tiff.name} ({type(e).__name__})"
     tmp = tiff.with_suffix(".fix.tiff")
     im.copy(xres=xres, yres=yres).tiffsave(
         str(tmp), tile=True, pyramid=True, bigtiff=True, compression="lzw")
