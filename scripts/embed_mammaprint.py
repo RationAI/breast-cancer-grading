@@ -60,7 +60,11 @@ def tissue_keep(slide_path: str, level: int, tiles: list[tuple[int, int]]) -> li
         mask_level = min(MASK_LEVEL, sl.level_count - 1)
         f = round(sl.level_downsamples[mask_level] / sl.level_downsamples[level])
         mpp_x, mpp_y = sl.slide_resolution(mask_level)
-        img = pyvips.Image.new_from_file(slide_path, level=mask_level)
+        # read via openslide, NOT pyvips(level=...): the resampled QC tiffs open as
+        # generic-tiff and vips' tiff loader rejects the level argument there
+        w, h = sl.level_dimensions[mask_level]
+        img = pyvips.Image.new_from_array(
+            np.asarray(sl.read_region_relative((0, 0), mask_level, (w, h)))[..., :3])
     m = np.asarray(tissue_mask(img, mpp=(mpp_x + mpp_y) / 2))
     if m.ndim == 3:
         m = m[..., 0]

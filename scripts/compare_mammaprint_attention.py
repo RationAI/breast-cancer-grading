@@ -169,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     score_dir = args.root / "score_cache"
 
     slides = pd.read_parquet(client.download_artifacts(args.run, "explanations/slides.parquet"))
+    slides = slides.rename(columns={"slide_path": "path",
+                                    "prediction_raw/mammaprint_index": "prediction",
+                                    "label/mammaprint_index": "label"})
     ours_summary = pd.read_csv(args.root / "masks" / "mammaprint" / "summary.csv")
     print(f"comparing {len(slides)} slides, score tag {tag}", flush=True)
 
