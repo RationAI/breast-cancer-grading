@@ -52,5 +52,7 @@ submit_job(
         # Green-but-did-nothing pods are useless; make the status honest.
         "[ $? -eq 0 ] || { echo FATAL: report failed; exit 1; }",
     ],
-    storage=[storage.secure.PROJECTS],
+    # agree-layer masks open the ORIGINAL WSIs (his /mnt/data paths) -> REPORT_DATA=1 mounts DATA
+    storage=[storage.secure.PROJECTS]
+    + ([storage.secure.DATA] if os.getenv("REPORT_DATA") else []),
 )
