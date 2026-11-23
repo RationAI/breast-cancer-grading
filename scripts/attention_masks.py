@@ -231,6 +231,14 @@ def stage_masks(args, tile_df, sel):
             img = img.embed(0, 0, max(w0, img.width), max(h0, img.height), extend="black")
         if img.width != w0 or img.height != h0:
             img = img.crop(0, 0, w0, h0)
+        # Stamp the slide's real pixel size (px/cm) onto the mask: a numpy-written
+        # tiff defaults to xres=1, which xOpat reads as 10 mm/px and rejects with
+        # "possibly faulty layers". Our canvas IS the level-0 grid, so copy the
+        # background slide's own resolution through.
+        head = pyvips.Image.new_from_file(slide_path, access="sequential")
+        xres, yres = float(head.xres), float(head.yres)
+        if xres > 1 and yres > 1:  # shortcut: slides without res metadata keep vips defaults
+            img = img.copy(xres=xres, yres=yres)
         img.tiffsave(str(path), tile=True, pyramid=True, bigtiff=True, compression="lzw")
         print(f"[stage2] {i}/{len(names)} {name}: {len(sub)} tiles -> "
               f"{path.name} {w0}x{h0} ({path.stat().st_size / 1e6:.0f} MB)", flush=True)
