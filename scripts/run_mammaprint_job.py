@@ -6,7 +6,8 @@ One pod, GPU first, both stages resumable.
     MM_GPU=mig-2g.20gb uv run python scripts/run_mammaprint_job.py   # if A40 stays Pending
 
 kube-jobs rejects an existing job name: delete the old one first
-(kubectl --context kubas-cluster delete job -n rationai-jobs-ns brc-grading-mmattn).
+(kubectl --context kubas-cluster delete job -n rationai-jobs-ns brc-grading-mmattn) or
+run alongside it under a second name: MM_JOB=brc-grading-mmattn-tiff.
 """
 
 import os
@@ -15,7 +16,7 @@ from kube_jobs import storage
 from run_embeddings import submit_with_hf_token  # HF_TOKEN secret injection
 
 
-JOB = "brc-grading-mmattn"
+JOB = os.environ.get("MM_JOB", "brc-grading-mmattn")
 # proven batch sizes: 512 A40 (cohort job), 512 mig-2g.20gb (configs/preprocessing/
 # embeddings.yaml comment), 128 mig-1g.10gb is a guess at ~1/4 of the 10GB slice
 BATCH = {"A40": 512, "A100": 1024, "H100": 2048, "mig-2g.20gb": 512, "mig-2g.24gb": 512,
