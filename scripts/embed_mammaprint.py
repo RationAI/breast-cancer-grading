@@ -19,7 +19,7 @@ Output: /mnt/projects/breast_cancer/brc_grading/embeddings/mou-bc/<slide_id>.par
 with columns x, y, embedding (level-px coords, float32 2560-d) -- the same layout
 as embeddings/bc20-24, which is what scripts/attention_masks.py reads.
 
-Resumable: a slide is skipped when its parquet exists with the expected row count.
+Resumable: a slide is skipped when its parquet exists with the row count within 1 %.
 
 Usage (cluster job with cuda + HF_TOKEN + HF_HOME, storage DATA+PROJECTS):
     python scripts/embed_mammaprint.py --batch 512
@@ -99,11 +99,21 @@ def embed_slide(model: torch.nn.Module, slide_path: str, out: Path,
     from datasets import Dataset as HFDataset
 
     from ml.data.datasets.tiles import TileDataset
-    from preprocessing.embeddings import embeddings_are_complete, save_embeddings
+    from preprocessing.embeddings import save_embeddings
 
     level, tiles = slide_tiles(slide_path)
-    if out.exists() and embeddings_are_complete(out, len(tiles)):
-        return 0
+    if out.exists():
+        import pyarrow.parquet as pq
+
+        try:
+            rows = pq.ParquetFile(out).metadata.num_rows
+        except (OSError, ValueError):
+            rows = -1
+        # tolerance, not the strict == of embeddings_are_complete(): the vips vs
+        # openslide mask path flips a few tissue-edge tiles while the per-tile
+        # vectors stay identical -- strict equality re-embedded 110 good slides
+        if len(tiles) > 0 and abs(rows - len(tiles)) <= 0.01 * len(tiles):
+            return 0
     ds = TileDataset(
         slide_path=slide_path, level=level, tile_extent_x=TILE, tile_extent_y=TILE,
         tiles=HFDataset.from_list([{"x": int(x), "y": int(y)} for x, y in tiles]),
