@@ -154,7 +154,11 @@ def main(argv: list[str] | None = None) -> int:
     import attention_masks as am
     from report_variants import use_cluster_mlflow
 
-    checkpoints = (args.checkpoints or am.DEFAULT_CHECKPOINT).split(",")
+    if args.checkpoints:
+        checkpoints = args.checkpoints.split(",")
+    else:  # same default as mammaprint_attention_stage: newest foldavg-* ensemble
+        arts = sorted(args.root.glob("artifacts/foldavg-*"))
+        checkpoints = sorted(str(p) for p in arts[-1].glob("weights/*.ckpt"))
     tag = hashlib.md5("|".join(str(Path(c).parent.name) for c in checkpoints).encode()).hexdigest()[:8]
 
     import mlflow
