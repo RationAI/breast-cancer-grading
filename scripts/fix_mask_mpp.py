@@ -55,6 +55,12 @@ def fix_one(args: tuple[Path, float, float]) -> str:
     return f"fixed {tiff.name} xres={xres:.1f}"
 
 
+def _worker_init() -> None:
+    # one-shot load->save per file: the vips operation cache just accumulates
+    # tile buffers across hundreds of masks and OOM-killed the first attempt
+    pyvips.cache_set_max(0)  # no op caching at all -> per-file memory freed on completion
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
@@ -87,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
                 todo.append((tiff, x, y))
     print(f"{len(todo)} masks to restamp, {len(missing)} without slide res: {missing[:5]}",
           flush=True)
-    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+    with ProcessPoolExecutor(max_workers=args.workers, initializer=_worker_init) as pool:
         for i, msg in enumerate(pool.map(fix_one, todo), 1):
             if i % 20 == 0 or (msg.startswith("fixed") and i < 3):
                 print(f"[{i}/{len(todo)}] {msg}", flush=True)
