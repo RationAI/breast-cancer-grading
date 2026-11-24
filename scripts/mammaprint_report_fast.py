@@ -85,6 +85,9 @@ def main() -> None:
         layers = layers_for(r.slide_name)
         session = XopatSession.from_slide(
             r.path, layers=layers, name=r.slide_name,
+            # registered slide_protocols name on this deployment; without it v3
+            # falls back to the default (IIP) and mrxs backgrounds never load
+            protocol="wsi_service",
             params={"ui": {"toolBar": "essential"}})
         note = (f"P(G3) {r.p_g3:.2f} · ρ drivers {r.loo_rho:+.2f} · "
                 f"ρ his-attn {r.attn_rho:.2f}")
@@ -95,6 +98,8 @@ def main() -> None:
 
     clean = rows[~rows.contaminated]
     report = Report(
+        theme="light",  # BASE_CSS dark-scope bug: its dark vars sit on a Div,
+        # body keeps the light ones -> dark scheme paints #e6e9ed text on white
         title="MammaPrint risk drivers × our grade attention",
         subtitle=f"{cards} slides · xOpat v3",
         preamble=(
