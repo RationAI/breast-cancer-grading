@@ -17,7 +17,7 @@ provably aligned — any disagreement below is real, not a registration artifact
 
 ## Results (per-slide Spearman ρ, n = 304)
 
-| Compared quantity | median ρ | IQR | slides ρ > 0 | slides |ρ| > 0.3 |
+| Compared quantity | median ρ | IQR | slides ρ > 0 | slides abs ρ > 0.3 |
 |---|---|---|---|---|
 | our attention vs **his risk-driver tiles** (signed LOO) | **0.02** | −0.19 … +0.20 | 52 % | 29 % (both signs) |
 | our attention vs **magnitude** of his attribution (abs LOO) | **0.01** | −0.09 … +0.11 | ~51 % | 2 % |
