@@ -75,6 +75,8 @@ def layers_for(stem: str) -> list[dict]:
 
 def main() -> None:
     rows = pd.read_csv(ROOT / "mammaprint_compare" / "report_summary.csv")
+    # the job's pandas keeps "False"/"True" as strings; ~ on that is nonsense
+    rows["contaminated"] = rows.contaminated.astype(str).str.lower().eq("true")
     rows = rows.sort_values("loo_rho", ascending=False, na_position="last")
 
     grid = SlideGrid()
