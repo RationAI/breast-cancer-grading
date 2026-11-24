@@ -23,7 +23,7 @@ považujeme za shodu nulovou.
 | Srovnání (304 snímků, medián ρ) | Hodnota | Výklad |
 |---|---|---|
 | naše attention vs. **řidiči rizika MammaPrint** | **+0,02** (52 % snímků kladných) | mince – žádná shoda |
-| naše attention vs. velikost jeho vlivu (|LOO|) | +0,01 | nic |
+| naše attention vs. **síla jeho vlivu na výsledek**, bez ohledu na směr (abs. LOO) | +0,01 | náš model nenachází ani „důležité“ úrysky – nic z toho, co MammaPrintu řídí výsledek |
 | naše attention vs. jeho **hrubá attention** | **+0,62** (96 % snímků kladných) | oba modely upřednostňují tumor před pozadím |
 
 Jinými slovy: **oba modely se dívají na tumor, ale který tumor „dělá riziko“,
