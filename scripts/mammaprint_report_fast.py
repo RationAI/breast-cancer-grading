@@ -21,6 +21,7 @@ anonymously and cannot reach the private ReportFast repo).
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -39,8 +40,11 @@ ATTN = ROOT / "masks" / "mammaprint"
 LOO = ROOT / "masks" / "mammaprint-loo-lowers"
 AGREE = ROOT / "masks" / "mammaprint-agree"
 
-# Our attention TIFFs encode log1p(6w)/log1p(6) scaled to 0..255, so the colour
-# breaks are 1/6..5/6 of that scale, with 0 dropped (same ramp as the v2 report).
+# Our attention TIFFs encode decades of attention above an equal share: 1 = an
+# average tile, 128 = 10x, 255 = 100x or more -- so BRIGHTER grey = higher
+# attention (a slide where nothing stands out stays pale). The 7 colour bins are
+# even cuts of 0..255 (1x, 3x, 6x, 10x, 18x, 32x, 100x), 0 = no tile dropped
+# (same ramp as the v2 report).
 GRAY = ["#000000", "#2b2b2b", "#555555", "#808080",
         "#aaaaaa", "#d4d4d4", "#ffffff"]
 GRAY_BREAKS = [0.0039, 0.1667, 0.3333, 0.5, 0.6667, 0.8333]
@@ -77,6 +81,15 @@ def main() -> None:
     rows = pd.read_csv(ROOT / "mammaprint_compare" / "report_summary.csv")
     # the job's pandas keeps "False"/"True" as strings; ~ on that is nonsense
     rows["contaminated"] = rows.contaminated.astype(str).str.lower().eq("true")
+    # report_summary.csv kept only P(G3); the full posterior sits on the
+    # attention stage's summary as a JSON list [p(G0)..p(G3)]
+    summ = ROOT / "masks" / "mammaprint" / "summary.csv"
+    if summ.exists():
+        post = (pd.read_csv(summ)[["slide_name", "probs"]]
+                .drop_duplicates("slide_name").set_index("slide_name").probs)
+        for i in range(4):
+            rows[f"p_g{i}"] = rows.slide_name.map(
+                post.map(lambda j, i=i: json.loads(j)[i]))
     rows = rows.sort_values("loo_rho", ascending=False, na_position="last")
 
     grid = SlideGrid()
@@ -89,8 +102,13 @@ def main() -> None:
             # falls back to the default (IIP) and mrxs backgrounds never load
             protocol="wsi_service",
             params={"ui": {"toolBar": "essential"}})
-        note = (f"P(G3) {r.p_g3:.2f} · ρ drivers {r.loo_rho:+.2f} · "
-                f"ρ his-attn {r.attn_rho:.2f}")
+        note = ""
+        if hasattr(r, "p_g0"):
+            note = ("P(G0-3) "
+                    + "/".join(f"{getattr(r, f'p_g{i}'):.2f}" for i in range(4))
+                    + " · ")
+        note += (f"ρ order-vs-drivers {r.loo_rho:+.2f} · "
+                 f"ρ order-vs-his-attention {r.attn_rho:.2f}")
         if bool(r.contaminated):
             note += " · RESAMPLE (contaminated)"
         grid.add(session, note=note)
@@ -103,15 +121,19 @@ def main() -> None:
         title="MammaPrint risk drivers × our grade attention",
         subtitle=f"{cards} slides · xOpat v3",
         preamble=(
-            "Orange = tiles that drive his MammaPrint prediction (signed LOO). "
-            "Grey = our attention (darker = higher). Green (drawn by default) = "
-            "tiles both models put in their top decile. Tile-level agreement is "
-            f"absent by any measure: median ρ(ours, his drivers) = "
-            f"{clean.loo_rho.median():+.2f}, while both models' raw attention "
-            f"correlate at {clean.attn_rho.median():+.2f} — they rank tumour "
-            "similarly but disagree on what matters. If a card opens black or "
-            "warns about a layer, note the slide: this page was rebuilt for the "
-            "v3 viewer and the links are unverified from the build machine."
+            "Orange = tiles that drive his MammaPrint prediction (removing them "
+            "lowers his risk index). Grey = our model's attention: THE BRIGHTER "
+            "a tile, the more our grade model looks at it (whitest = 100x an "
+            "average tile). Green (drawn by default) = tiles both models rank in "
+            "their own top decile. ρ = Spearman rank correlation, -1..+1, between "
+            "how the two models ORDER this slide's tiles: -1 exact reversal, "
+            "0 unrelated (coin flip), +1 identical order; |ρ| < 0.2 is no real "
+            "agreement. Card numbers: P(G0-3) = our predicted grade probabilities. "
+            f"Cohort medians: ρ vs his risk drivers = {clean.loo_rho.median():+.2f} "
+            f"(coin flip), ρ vs his raw attention = {clean.attn_rho.median():+.2f} "
+            "- both models look at tumour, but disagree on what matters. If a "
+            "card opens black or warns about a layer, note the slide: links are "
+            "unverified from the build machine."
         ),
     )
     report.add(grid)
