@@ -1,0 +1,1 @@
+report_fast vendored from github.com/RationAI/ReportFast commit 810c09fed2fc968ffe715d81b56b3b0d2052ec47 (the job pod clones this repo over anonymous HTTPS and cannot reach the private ReportFast repo, so the package ships here; sys.path-injected by scripts/mammaprint_report_fast.py).
