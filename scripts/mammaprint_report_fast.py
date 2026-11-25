@@ -107,7 +107,8 @@ def main() -> None:
             note = ("P(G0-3) "
                     + "/".join(f"{getattr(r, f'p_g{i}'):.2f}" for i in range(4))
                     + " · ")
-        note += (f"ρ order-vs-drivers {r.loo_rho:+.2f} · "
+        note += (f"MM idx {r.prediction:+.2f} (true {r.label:+.2f}) · "
+                 f"ρ order-vs-drivers {r.loo_rho:+.2f} · "
                  f"ρ order-vs-his-attention {r.attn_rho:.2f}")
         if bool(r.contaminated):
             note += " · RESAMPLE (contaminated)"
@@ -128,7 +129,9 @@ def main() -> None:
             "their own top decile. ρ = Spearman rank correlation, -1..+1, between "
             "how the two models ORDER this slide's tiles: -1 exact reversal, "
             "0 unrelated (coin flip), +1 identical order; |ρ| < 0.2 is no real "
-            "agreement. Card numbers: P(G0-3) = our predicted grade probabilities. "
+            "agreement. Card numbers: P(G0-3) = our predicted grade "
+            "probabilities; MM idx = his MammaPrint index predicted from the "
+            "slide, with the true measurement in brackets. "
             f"Cohort medians: ρ vs his risk drivers = {clean.loo_rho.median():+.2f} "
             f"(coin flip), ρ vs his raw attention = {clean.attn_rho.median():+.2f} "
             "- both models look at tumour, but disagree on what matters. If a "
