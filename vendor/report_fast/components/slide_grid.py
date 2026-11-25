@@ -43,7 +43,7 @@ class SlideCard(BaseComponent):
         thumbnails: Set false for deployments without a thumbnail service.
         thumbnail_size: Thumbnail edge length in pixels.
         show_session: Fold the session JSON into the card.
-        note: One line under the label, for whatever the reader needs to know.
+        note: One line -- or a list, one line each -- under the label.
         name: Label override; defaults to the session's own.
     """
 
@@ -111,7 +111,9 @@ class SlideCard(BaseComponent):
             Figcaption(
                 Span(name, cls="rf-name"),
                 Span(self._meta(), cls="rf-meta"),
-                *[P(self.note, cls="rf-note")] if self.note else [],
+                *[P(line, cls="rf-note") for line in
+                  ([self.note] if isinstance(self.note, str) else self.note)
+                  if line],
                 *self._session_details(),
                 A("Open in xOpat", href=self.url, target="_blank", rel="noopener"),
             ),

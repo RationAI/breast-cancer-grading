@@ -27,6 +27,16 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from fasthtml.common import (
+    Div,
+    Input,
+    Label,
+    Option,
+    Script,
+    Select,
+    Span,
+    Style,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendor"))
 
@@ -48,6 +58,78 @@ AGREE = ROOT / "masks" / "mammaprint-agree"
 GRAY = ["#000000", "#2b2b2b", "#555555", "#808080",
         "#aaaaaa", "#d4d4d4", "#ffffff"]
 GRAY_BREAKS = [0.0039, 0.1667, 0.3333, 0.5, 0.6667, 0.8333]
+
+TOOLBAR_CSS = """
+#mm-toolbar { display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+              font-size: 0.92rem; margin: 10px 0 14px; }
+#mm-toolbar label { display: inline-flex; gap: 5px; align-items: center; }
+#mm-toolbar select { padding: 2px 6px; }
+#mm-count { color: var(--rf-muted); }
+"""
+
+# Sorting/filtering the vendored library cannot do (it is a no-JS page): the
+# card name is the join key, the numbers ride along as a literal JS map.
+TOOLBAR_JS = """
+const MM = %s;
+(function () {
+  const grid = document.querySelector('.rf-slide-grid');
+  if (!grid) return;
+  const cards = Array.from(grid.children);
+  const nameOf = c => (c.querySelector('.rf-name') || {}).textContent || '';
+  const meta = c => MM[nameOf(c).trim()];
+  const f = { grade: -1, disc: false, hideBad: false, sort: 'absSurprise' };
+  const KEYS = {
+    absSurprise: m => -Math.abs(m.s),
+    surpriseUp: m => m.s,
+    surpriseDown: m => -m.s,
+    trueUp: m => m.t,
+    gradeUp: m => m.g,
+    name: (m, n) => n
+  };
+  const origin = new Map(cards.map((c, i) => [c, i]));
+  function sortCards() {
+    const key = KEYS[f.sort];
+    if (!key) return;
+    cards.sort((a, b) => {
+      const A = meta(a), B = meta(b);
+      const ka = A ? key(A, nameOf(a)) : Infinity;
+      const kb = B ? key(B, nameOf(b)) : Infinity;
+      return ka < kb ? -1 : ka > kb ? 1 : origin.get(a) - origin.get(b);
+    });
+    cards.forEach(c => grid.appendChild(c));
+  }
+  function paint() {
+    let shown = 0;
+    for (const c of cards) {
+      const m = meta(c);
+      const ok = m
+        && (f.grade < 0 || m.g === f.grade)
+        && (!f.disc || Math.abs(m.s) >= 0.35)
+        && (!f.hideBad || !m.bad);
+      c.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+      if (m) {
+        const line = Array.from(c.querySelectorAll('.rf-note'))
+          .find(p => p.textContent.startsWith('surprise'));
+        if (line) line.style.color =
+          m.s <= -0.35 ? '#c0392b' : m.s >= 0.35 ? '#188038' : '';
+      }
+    }
+    const el = document.getElementById('mm-count');
+    if (el) el.textContent = shown + ' / ' + cards.length + ' slides';
+  }
+  const on = (id, ev, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(ev, fn);
+  };
+  on('mm-grade', 'change', e => { f.grade = +e.target.value; paint(); });
+  on('mm-disc', 'change', e => { f.disc = e.target.checked; paint(); });
+  on('mm-hidebad', 'change', e => { f.hideBad = e.target.checked; paint(); });
+  on('mm-sort', 'change', e => { f.sort = e.target.value; sortCards(); });
+  sortCards();
+  paint();
+})();
+"""
 
 
 def layers_for(stem: str) -> list[dict]:
@@ -90,6 +172,16 @@ def main() -> None:
         for i in range(4):
             rows[f"p_g{i}"] = rows.slide_name.map(
                 post.map(lambda j, i=i: json.loads(j)[i]))
+    # grade call + how far each slide strays from its grade's usual index
+    rows["our_grade"] = rows[[f"p_g{i}" for i in range(4)]].values.argmax(axis=1)
+    rows["expected"] = rows.groupby("our_grade").label.transform("median")
+    rows["surprise"] = rows.label - rows.expected
+    meta = {
+        r.slide_name: dict(g=int(r.our_grade), t=round(float(r.label), 3),
+                           s=round(float(r.surprise), 3),
+                           d=float(r.loo_rho), bad=bool(r.contaminated))
+        for r in rows.itertuples()
+    }
     rows = rows.sort_values("loo_rho", ascending=False, na_position="last")
 
     grid = SlideGrid()
@@ -102,16 +194,15 @@ def main() -> None:
             # falls back to the default (IIP) and mrxs backgrounds never load
             protocol="wsi_service",
             params={"ui": {"toolBar": "essential"}})
-        note = ""
-        if hasattr(r, "p_g0"):
-            note = ("P(G0-3) "
-                    + "/".join(f"{getattr(r, f'p_g{i}'):.2f}" for i in range(4))
-                    + " · ")
-        note += (f"MM idx {r.prediction:+.2f} (true {r.label:+.2f}) · "
-                 f"ρ order-vs-drivers {r.loo_rho:+.2f} · "
-                 f"ρ order-vs-his-attention {r.attn_rho:.2f}")
+        note = [
+            f"grade {int(r.our_grade)} · P(G0-3) "
+            + "/".join(f"{getattr(r, f'p_g{i}'):.2f}" for i in range(4)),
+            f"MM index measured {r.label:+.2f} · predicted from image {r.prediction:+.2f}",
+            f"surprise {r.surprise:+.2f} (typical for grade {r.expected:+.2f})",
+            f"ρ drivers {r.loo_rho:+.2f} · ρ attention {r.attn_rho:.2f}",
+        ]
         if bool(r.contaminated):
-            note += " · RESAMPLE (contaminated)"
+            note.append("RESAMPLE (contaminated)")
         grid.add(session, note=note)
         cards += 1
 
@@ -129,9 +220,13 @@ def main() -> None:
             "their own top decile. ρ = Spearman rank correlation, -1..+1, between "
             "how the two models ORDER this slide's tiles: -1 exact reversal, "
             "0 unrelated (coin flip), +1 identical order; |ρ| < 0.2 is no real "
-            "agreement. Card numbers: P(G0-3) = our predicted grade "
-            "probabilities; MM idx = his MammaPrint index predicted from the "
-            "slide, with the true measurement in brackets. "
+            "agreement. Card numbers, line by line: our grade call and the full "
+            "grade probabilities; his MammaPrint index as measured and as "
+            "predicted from this image; surprise = measured index minus the "
+            "median index of our slides of the same grade (negative = riskier "
+            "than the grade suggests, printed red from |0.35| up, safer = "
+            "green); and the two per-slide ρ. The toolbar sorts and filters "
+            "the cards; by default the most discordant slides come first. "
             f"Cohort medians: ρ vs his risk drivers = {clean.loo_rho.median():+.2f} "
             f"(coin flip), ρ vs his raw attention = {clean.attn_rho.median():+.2f} "
             "- both models look at tumour, but disagree on what matters. If a "
@@ -139,7 +234,24 @@ def main() -> None:
             "unverified from the build machine."
         ),
     )
+    report.add(Style(TOOLBAR_CSS))
+    report.add(Div(
+        Label("grade ", Select(
+            Option("all", value="-1"),
+            *[Option(f"G{i}", value=str(i)) for i in range(4)], id="mm-grade")),
+        Label(Input(type="checkbox", id="mm-disc"),
+              "only discordant (|surprise| ≥ 0.35)"),
+        Label(Input(type="checkbox", id="mm-hidebad"), "hide resampled"),
+        Label("sort ", Select(
+            Option("|surprise| desc", value="absSurprise"),
+            Option("surprise asc (risk surprises first)", value="surpriseUp"),
+            Option("surprise desc", value="surpriseDown"),
+            Option("measured index asc", value="trueUp"),
+            Option("grade asc", value="gradeUp"),
+            Option("name", value="name"), id="mm-sort")),
+        Span(id="mm-count"), id="mm-toolbar"))
     report.add(grid)
+    report.add(Script(TOOLBAR_JS % json.dumps(meta)))
     path = report.write(OUT)
     sizes = pd.Series([len(layers_for(s)) for s in rows.slide_name])
     print(f"-> {path} ({path.stat().st_size / 1e6:.1f} MB), {cards} cards, "
